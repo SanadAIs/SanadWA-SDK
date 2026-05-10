@@ -1,0 +1,105 @@
+/**
+ * Public types for `@sanadais/whatsapp-sdk`.
+ *
+ * Wire format is snake_case; the SDK exposes camelCase. Resource modules
+ * handle the mapping.
+ */
+
+export interface ClientOptions {
+  /** Tenant API key (e.g. `pk_live_…`). Required. */
+  apiKey: string;
+  /** Override base URL (default: `https://api.sanadais.com/api/public/v1`). */
+  baseUrl?: string;
+  /** Total attempts including the first request (default: 5). */
+  retries?: number;
+  /** Inject a custom `fetch` implementation for testing. */
+  fetch?: typeof fetch;
+  /** Override the User-Agent header. */
+  userAgent?: string;
+}
+
+export interface HealthResponse {
+  tenantId: string;
+  scope: string;
+  serverTime: string;
+}
+
+export interface Template {
+  name: string;
+  language: string;
+  category: string;
+  status: string;
+  components: unknown | null;
+}
+
+export interface ListTemplatesOptions {
+  page?: number;
+  limit?: number;
+  q?: string;
+}
+
+export interface ListTemplatesResponse {
+  page: number;
+  limit: number;
+  data: Template[];
+}
+
+export interface SendMessageOptions {
+  phoneNumberId: string;
+  toPhone: string;
+  templateName: string;
+  templateLanguage?: string;
+  templateParams?: string[];
+  templateComponents?: unknown[];
+  /** Optional client-supplied idempotency key. If omitted, the SDK generates a UUID v4 automatically. */
+  idempotencyKey?: string;
+}
+
+export interface SendMessageResponse {
+  messageId: string | null;
+  acceptedAt: string;
+  /** True when the server returned a cached response for an existing idempotency key. */
+  replayed: boolean;
+  upstream: {
+    messagingProduct: string;
+    contacts: unknown[];
+    messages: unknown[];
+  };
+}
+
+export interface Message {
+  id: string;
+  providerMsgId: string | null;
+  status: string;
+  sentAt: string;
+  templateName: string;
+  toPhone: string;
+  channel: string;
+  provider: string;
+  error: string | null;
+  deliveredAt: string | null;
+  readAt: string | null;
+  failedAt: string | null;
+  lastStatus: string | null;
+}
+
+/**
+ * Discriminated union covering all webhook event types currently emitted by
+ * the SANAD WhatsApp Public API. Narrow on `type` for exhaustive handling.
+ */
+export type WebhookEvent =
+  | { type: 'message.sent'; data: { messageId: string; toPhone: string; templateName: string; templateLanguage: string; sentAt: string } }
+  | { type: 'message.delivered'; data: { messageId: string; deliveredAt: string } }
+  | { type: 'message.read'; data: { messageId: string; readAt: string } }
+  | { type: 'message.failed'; data: { messageId: string; error: string; failedAt: string } }
+  | { type: 'inbound.message'; data: { fromPhone: string; text?: string; messageType: string; raw: unknown } };
+
+export interface WebhookVerifyInput {
+  rawBody: string | Uint8Array;
+  signature: string;
+  secret: string;
+}
+
+export type WebhookVerifyResult =
+  | { valid: true; event: WebhookEvent }
+  | { valid: false; reason: string };
