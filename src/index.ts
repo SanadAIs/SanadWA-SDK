@@ -28,7 +28,7 @@ import type {
 
 const DEFAULT_BASE_URL = 'https://api.sanadais.com/api/public/v1';
 const DEFAULT_RETRIES = 5;
-const DEFAULT_USER_AGENT = '@sanadais/whatsapp-sdk/0.1.0';
+const DEFAULT_USER_AGENT = '@sanadais/whatsapp-sdk/0.2.0';
 
 export class SanadWhatsApp {
   readonly #req: Requester;
@@ -97,3 +97,12 @@ export type {
   WebhookVerifyInput,
   WebhookVerifyResult,
 } from './types.js';
+
+// Phase 60 OPS-V2-04 — webhook fixtures for adopter unit tests.
+// `__` prefix marks this as a TESTING surface, not the supported runtime API.
+import * as __testFixtures from './testFixtures.js';
+export { __testFixtures };
+export type { WebhookFixture } from './testFixtures.js';
+
+// Standalone re-export for adopters who don't want to construct the client.
+export { verifyWebhook } from './resources/webhooks.js';

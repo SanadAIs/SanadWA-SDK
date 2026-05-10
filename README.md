@@ -39,6 +39,29 @@ console.log(msg.status); // 'sent' | 'delivered' | 'read' | 'failed'
 
 ## Webhooks
 
+### Signature contract
+
+SANAD signs every outbound webhook with HMAC-SHA256 over the **exact raw
+request body bytes** using the per-webhook shared secret:
+
+```
+X-Sanad-Signature: sha256=<hex>
+hex = HMAC-SHA256(secret, raw_body_bytes)
+```
+
+The `sha256=` prefix is literal; everything after the `=` is lowercase hex.
+Always use `express.raw({ type: 'application/json' })` (or your framework's
+equivalent) so re-serialization doesn't shuffle key order and break the
+signature.
+
+Each delivery also carries a `X-Sanad-Delivery-Id` header. **This header is
+the canonical dedupe key** (use it as your idempotency token in your handler).
+Phase 60 (v0.2.0) intentionally removed `delivery_id` from the signed body to
+keep payload identity and retry identity cleanly separated; rely on the
+header, not the payload, for at-most-once handling.
+
+### Example
+
 ```ts
 import { SanadWhatsApp } from '@sanadais/whatsapp-sdk';
 import express from 'express';
@@ -66,6 +89,32 @@ app.post('/webhooks/sanad', express.raw({ type: 'application/json' }), (req, res
   res.sendStatus(204);
 });
 ```
+
+### Testing your webhook handler
+
+The SDK ships canonical wire-format fixtures so you can unit-test handlers
+without standing up SANAD or hand-computing HMACs:
+
+```ts
+import { __testFixtures, verifyWebhook } from '@sanadais/whatsapp-sdk';
+
+const f = __testFixtures.createMessageDeliveredFixture();
+const result = verifyWebhook({
+  rawBody: f.rawBody,
+  signature: f.signature,
+  secret: f.secret,
+});
+// result === { valid: true, event: f.expectedEvent }
+```
+
+Available fixtures (each accepts overrides like `{ messageId, secret, ... }`):
+
+- `__testFixtures.createMessageDeliveredFixture()`
+- `__testFixtures.createMessageReadFixture()`
+- `__testFixtures.createInboundMessageFixture()`
+
+The `__` prefix is intentional — these are a TESTING surface, not the
+supported runtime API.
 
 ## Errors
 
