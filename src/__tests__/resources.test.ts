@@ -1,0 +1,132 @@
+import { describe, it, expect, vi } from 'vitest';
+import { health } from '../resources/health.js';
+import { listTemplates } from '../resources/templates.js';
+import { sendMessage, getMessage } from '../resources/messages.js';
+import { NotFoundError } from '../errors.js';
+import type { Requester, RequestOptions } from '../request.js';
+
+const mkRequester = (impl: <T>(opts: RequestOptions) => Promise<T>): Requester => impl;
+
+describe('health resource', () => {
+  it('GET /health and maps server_time → serverTime', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, tenant_id: 't_1', scope: 'send', server_time: '2026-05-10T00:00:00Z' } as unknown as T;
+    });
+    const out = await health(req);
+    expect(out).toEqual({ tenantId: 't_1', scope: 'send', serverTime: '2026-05-10T00:00:00Z' });
+    expect(calls[0]).toMatchObject({ method: 'GET', path: '/health' });
+  });
+});
+
+describe('templates resource', () => {
+  it('builds query for {page,limit,q}', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, page: 2, limit: 25, data: [] } as unknown as T;
+    });
+    await listTemplates(req, { page: 2, limit: 25, q: 'hi' });
+    expect(calls[0]!.query).toEqual({ page: 2, limit: 25, q: 'hi' });
+  });
+
+  it('omits query when no opts given', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, page: 1, limit: 50, data: [] } as unknown as T;
+    });
+    await listTemplates(req);
+    expect(calls[0]!.query).toBeUndefined();
+  });
+});
+
+describe('messages.send', () => {
+  it('POSTs snake_case body, idempotent:true, captures replayed from header', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      // Simulate the request layer firing onHeaders with X-Idempotent-Replay
+      if (opts.onHeaders) {
+        opts.onHeaders(new Headers({ 'x-idempotent-replay': 'true' }));
+      }
+      return {
+        success: true,
+        message_id: 'msg_1',
+        accepted_at: '2026-05-10T00:00:00Z',
+        upstream: { messaging_product: 'whatsapp', contacts: [], messages: [] },
+      } as unknown as T;
+    });
+
+    const out = await sendMessage(req, {
+      phoneNumberId: 'PNID',
+      toPhone: '+962790000000',
+      templateName: 'hello_world',
+      templateLanguage: 'en',
+      templateParams: ['Alice'],
+    });
+
+    expect(calls[0]!.method).toBe('POST');
+    expect(calls[0]!.path).toBe('/messages/template');
+    expect(calls[0]!.idempotent).toBe(true);
+    expect(calls[0]!.body).toEqual({
+      phone_number_id: 'PNID',
+      to_phone: '+962790000000',
+      template_name: 'hello_world',
+      template_language: 'en',
+      template_params: ['Alice'],
+    });
+    expect(out.messageId).toBe('msg_1');
+    expect(out.replayed).toBe(true);
+    expect(out.upstream.messagingProduct).toBe('whatsapp');
+  });
+
+  it('replayed=false when header absent', async () => {
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      if (opts.onHeaders) opts.onHeaders(new Headers());
+      return { success: true, message_id: 'm', accepted_at: 'now' } as unknown as T;
+    });
+    const out = await sendMessage(req, { phoneNumberId: 'p', toPhone: '+1', templateName: 't' });
+    expect(out.replayed).toBe(false);
+  });
+
+  it('passes idempotency_key through when provided', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, message_id: 'm', accepted_at: 'now' } as unknown as T;
+    });
+    await sendMessage(req, { phoneNumberId: 'p', toPhone: '+1', templateName: 't', idempotencyKey: 'custom_key' });
+    expect((calls[0]!.body as Record<string, unknown>).idempotency_key).toBe('custom_key');
+  });
+});
+
+describe('messages.get', () => {
+  it('URL-encodes id and maps response data', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return {
+        success: true,
+        data: {
+          id: 'msg_1', provider_msg_id: 'wa_x', status: 'sent', sent_at: '2026-05-10T00:00:00Z',
+          template_name: 'hello', to_phone: '+1', channel: 'whatsapp', provider: 'meta',
+          error: null, delivered_at: null, read_at: null, failed_at: null, last_status: 'sent',
+        },
+      } as unknown as T;
+    });
+    const out = await getMessage(req, 'msg/with spaces');
+    expect(calls[0]!.path).toBe(`/messages/${encodeURIComponent('msg/with spaces')}`);
+    expect(out.id).toBe('msg_1');
+    expect(out.providerMsgId).toBe('wa_x');
+    expect(out.lastStatus).toBe('sent');
+  });
+
+  it('propagates NotFoundError from request layer', async () => {
+    const req = mkRequester(async () => {
+      throw new NotFoundError({ message: 'not found', code: 'message_not_found', status: 404 });
+    });
+    await expect(getMessage(req, 'missing')).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
