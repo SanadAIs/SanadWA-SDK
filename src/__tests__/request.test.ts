@@ -29,7 +29,7 @@ const mkResponse = (
 const baseOpts = {
   apiKey: 'pk_test_xxx',
   baseUrl: 'https://api.test/v1',
-  userAgent: '@sanadais/whatsapp-sdk/0.1.0',
+  userAgent: '@sanadwa/whatsapp-sdk/0.1.0',
 };
 
 // ---------- parseRetryAfter ----------
@@ -283,7 +283,7 @@ describe('createRequester', () => {
     expect(headers['Authorization']).toBe('Bearer pk_test_xxx');
     expect(headers['Content-Type']).toBe('application/json');
     expect(headers['Accept']).toBe('application/json');
-    expect(headers['User-Agent']).toBe('@sanadais/whatsapp-sdk/0.1.0');
+    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.1.0');
   });
 
   it('No Content-Type when no body', async () => {

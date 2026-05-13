@@ -1,5 +1,5 @@
 {
-  "name": "@sanadais/whatsapp-sdk",
+  "name": "@sanadwa/whatsapp-sdk",
   "version": "0.2.0",
   "description": "Official TypeScript SDK for the SANAD WhatsApp Public API.",
   "type": "module",

@@ -50,7 +50,7 @@ describe('SanadWhatsApp.health', () => {
     await vi.runAllTimersAsync();
     const out = await p;
     expect(out).toEqual({ tenantId: 't_1', scope: 'send', serverTime: '2026-05-10T00:00:00Z' });
-    expect(fetchImpl.mock.calls[0]![0]).toBe('https://api.sanadais.com/api/public/v1/health');
+    expect(fetchImpl.mock.calls[0]![0]).toBe('https://api.sanadwa.com/api/public/v1/health');
   });
 
   it('respects custom baseUrl', async () => {

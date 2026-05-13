@@ -1,17 +1,17 @@
-# @sanadais/whatsapp-sdk
+# @sanadwa/whatsapp-sdk
 
 Official TypeScript SDK for the SANAD WhatsApp Public API. Zero runtime dependencies. Dual ESM/CJS. Node ≥20.
 
 ## Install
 
 ```sh
-npm install @sanadais/whatsapp-sdk
+npm install @sanadwa/whatsapp-sdk
 ```
 
 ## Quickstart (5 minutes)
 
 ```ts
-import { SanadWhatsApp } from '@sanadais/whatsapp-sdk';
+import { SanadWhatsApp } from '@sanadwa/whatsapp-sdk';
 
 const sdk = new SanadWhatsApp({ apiKey: process.env.SANAD_API_KEY! });
 
@@ -63,7 +63,7 @@ header, not the payload, for at-most-once handling.
 ### Example
 
 ```ts
-import { SanadWhatsApp } from '@sanadais/whatsapp-sdk';
+import { SanadWhatsApp } from '@sanadwa/whatsapp-sdk';
 import express from 'express';
 
 const sdk = new SanadWhatsApp({ apiKey: process.env.SANAD_API_KEY! });
@@ -96,7 +96,7 @@ The SDK ships canonical wire-format fixtures so you can unit-test handlers
 without standing up SANAD or hand-computing HMACs:
 
 ```ts
-import { __testFixtures, verifyWebhook } from '@sanadais/whatsapp-sdk';
+import { __testFixtures, verifyWebhook } from '@sanadwa/whatsapp-sdk';
 
 const f = __testFixtures.createMessageDeliveredFixture();
 const result = verifyWebhook({
@@ -127,7 +127,7 @@ All HTTP errors subclass `SanadApiError`:
 - `ServerError` (5xx, network failures) — exposes optional `upstreamCode`
 
 ```ts
-import { SanadApiError, RateLimitedError } from '@sanadais/whatsapp-sdk';
+import { SanadApiError, RateLimitedError } from '@sanadwa/whatsapp-sdk';
 
 try {
   await sdk.messages.send({ /* ... */ });
@@ -153,10 +153,10 @@ Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. T
 | Option       | Default                                        | Notes                                   |
 | ------------ | ---------------------------------------------- | --------------------------------------- |
 | `apiKey`     | required                                       | `pk_live_…` from your SANAD dashboard   |
-| `baseUrl`    | `https://api.sanadais.com/api/public/v1`       | Override for staging                    |
+| `baseUrl`    | `https://api.sanadwa.com/api/public/v1`       | Override for staging                    |
 | `retries`    | `5`                                            | Total attempts including the first      |
 | `fetch`      | `globalThis.fetch`                             | Inject for testing                      |
-| `userAgent`  | `@sanadais/whatsapp-sdk/0.1.0`                 | Override for diagnostics                |
+| `userAgent`  | `@sanadwa/whatsapp-sdk/0.1.0`                 | Override for diagnostics                |
 
 ## License
 

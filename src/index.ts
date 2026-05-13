@@ -1,9 +1,9 @@
 /**
- * `@sanadais/whatsapp-sdk` — public entry.
+ * `@sanadwa/whatsapp-sdk` — public entry.
  *
  * @example
  * ```ts
- * import { SanadWhatsApp } from '@sanadais/whatsapp-sdk';
+ * import { SanadWhatsApp } from '@sanadwa/whatsapp-sdk';
  * const sdk = new SanadWhatsApp({ apiKey: process.env.SANAD_API_KEY! });
  * await sdk.health();
  * ```
@@ -26,9 +26,9 @@ import type {
   WebhookVerifyResult,
 } from './types.js';
 
-const DEFAULT_BASE_URL = 'https://api.sanadais.com/api/public/v1';
+const DEFAULT_BASE_URL = 'https://api.sanadwa.com/api/public/v1';
 const DEFAULT_RETRIES = 5;
-const DEFAULT_USER_AGENT = '@sanadais/whatsapp-sdk/0.2.0';
+const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.2.0';
 
 export class SanadWhatsApp {
   readonly #req: Requester;

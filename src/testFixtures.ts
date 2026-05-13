@@ -5,8 +5,8 @@
  * adopter can:
  *
  * ```ts
- * import { __testFixtures } from '@sanadais/whatsapp-sdk';
- * import { verifyWebhook } from '@sanadais/whatsapp-sdk';
+ * import { __testFixtures } from '@sanadwa/whatsapp-sdk';
+ * import { verifyWebhook } from '@sanadwa/whatsapp-sdk';
  *
  * const fx = __testFixtures.createMessageDeliveredFixture();
  * const result = verifyWebhook({

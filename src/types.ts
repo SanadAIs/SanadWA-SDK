@@ -1,5 +1,5 @@
 /**
- * Public types for `@sanadais/whatsapp-sdk`.
+ * Public types for `@sanadwa/whatsapp-sdk`.
  *
  * Wire format is snake_case; the SDK exposes camelCase. Resource modules
  * handle the mapping.
@@ -8,7 +8,7 @@
 export interface ClientOptions {
   /** Tenant API key (e.g. `pk_live_…`). Required. */
   apiKey: string;
-  /** Override base URL (default: `https://api.sanadais.com/api/public/v1`). */
+  /** Override base URL (default: `https://api.sanadwa.com/api/public/v1`). */
   baseUrl?: string;
   /** Total attempts including the first request (default: 5). */
   retries?: number;

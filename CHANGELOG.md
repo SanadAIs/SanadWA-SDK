@@ -12,7 +12,7 @@ Added (Phase 60 OPS-V2-03 / OPS-V2-04 / SEC-06 documentation refresh):
   computing HMACs.
 - **`verifyWebhook` standalone re-export** from the package root, so
   adopters who only need verification (no API client) can
-  `import { verifyWebhook } from '@sanadais/whatsapp-sdk'` without
+  `import { verifyWebhook } from '@sanadwa/whatsapp-sdk'` without
   constructing `SanadWhatsApp`.
 - **`WebhookFixture` type** exported for adopters using TypeScript.
 
