@@ -14,66 +14,104 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type {
   WebhookEvent,
+  WebhookFailedError,
   WebhookVerifyInput,
   WebhookVerifyResult,
 } from '../types.js';
 
 interface RawEnvelope {
+  // Live wire envelope (authoritative): { event, tenant_id, data }.
+  event?: string;
+  tenant_id?: number;
+  data?: Record<string, unknown>;
+  // Legacy envelope tolerated for backward-compat: { event_type, payload }.
   event_type?: string;
   payload?: Record<string, unknown>;
-  sent_at?: string;
 }
 
 const asString = (v: unknown): string | undefined =>
-  typeof v === 'string' ? v : undefined;
+  typeof v === 'string' && v.length > 0 ? v : undefined;
+
+// `message_id` arrives as the numeric DB row id on status events and as a
+// string WA id on send/inbound events — coerce both to a string id.
+const asId = (v: unknown): string | undefined => {
+  if (typeof v === 'string' && v.length > 0) return v;
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  return undefined;
+};
+
+// Live `data.error` is `{ code, title, message }`. Tolerate a bare string
+// (legacy) by surfacing it as `message`.
+const parseFailedError = (raw: unknown): WebhookFailedError => {
+  if (raw && typeof raw === 'object') {
+    const e = raw as Record<string, unknown>;
+    return {
+      code: typeof e.code === 'number' ? e.code : null,
+      title: asString(e.title) ?? null,
+      message: asString(e.message) ?? null,
+    };
+  }
+  if (typeof raw === 'string') return { code: null, title: null, message: raw };
+  return { code: null, title: null, message: null };
+};
 
 const narrowWebhookEvent = (parsed: unknown): WebhookEvent | null => {
   if (!parsed || typeof parsed !== 'object') return null;
   const env = parsed as RawEnvelope;
-  const t = env.event_type;
-  const p = env.payload ?? {};
-  if (!t || typeof p !== 'object') return null;
+  const t = env.event ?? env.event_type;
+  const rawData = env.data ?? env.payload;
+  if (!t || !rawData || typeof rawData !== 'object') return null;
+  const d = rawData as Record<string, unknown>;
 
   switch (t) {
     case 'message.sent': {
-      const messageId = asString(p.message_id);
-      const toPhone = asString(p.to_phone);
-      const templateName = asString(p.template_name);
-      const templateLanguage = asString(p.template_language);
-      const sentAt = asString(p.sent_at);
+      const messageId = asId(d.message_id);
+      const toPhone = asString(d.to_phone);
+      const templateName = asString(d.template_name);
+      const templateLanguage = asString(d.template_language);
+      const sentAt = asString(d.sent_at);
       if (!messageId || !toPhone || !templateName || !templateLanguage || !sentAt) return null;
-      return { type: 'message.sent', data: { messageId, toPhone, templateName, templateLanguage, sentAt } };
+      return { type: 'message.sent', data: { messageId, toPhone, templateName, templateLanguage, sentAt, raw: d } };
     }
     case 'message.delivered': {
-      const messageId = asString(p.message_id);
-      const deliveredAt = asString(p.delivered_at);
+      const messageId = asId(d.message_id);
+      const deliveredAt = asString(d.delivered_at);
       if (!messageId || !deliveredAt) return null;
-      return { type: 'message.delivered', data: { messageId, deliveredAt } };
+      return { type: 'message.delivered', data: { messageId, deliveredAt, raw: d } };
     }
     case 'message.read': {
-      const messageId = asString(p.message_id);
-      const readAt = asString(p.read_at);
+      const messageId = asId(d.message_id);
+      const readAt = asString(d.read_at);
       if (!messageId || !readAt) return null;
-      return { type: 'message.read', data: { messageId, readAt } };
+      return { type: 'message.read', data: { messageId, readAt, raw: d } };
     }
     case 'message.failed': {
-      const messageId = asString(p.message_id);
-      const error = asString(p.error);
-      const failedAt = asString(p.failed_at);
-      if (!messageId || error === undefined || !failedAt) return null;
-      return { type: 'message.failed', data: { messageId, error, failedAt } };
+      const messageId = asId(d.message_id);
+      const failedAt = asString(d.failed_at);
+      if (!messageId || !failedAt) return null;
+      return { type: 'message.failed', data: { messageId, failedAt, error: parseFailedError(d.error), raw: d } };
     }
     case 'inbound.message': {
-      const fromPhone = asString(p.from_phone);
-      const messageType = asString(p.type);
-      if (!fromPhone || !messageType) return null;
-      const text = asString(p.text);
-      const data: { fromPhone: string; text?: string; messageType: string; raw: unknown } = {
-        fromPhone,
+      const from = asString(d.from) ?? asString(d.from_phone);
+      const messageType = asString(d.type);
+      if (!from || !messageType) return null;
+      const data: {
+        from: string;
+        messageType: string;
+        messageId: string | null;
+        text?: string;
+        timestamp?: string;
+        raw: Record<string, unknown>;
+      } = {
+        from,
         messageType,
-        raw: p.raw,
+        messageId: asId(d.message_id) ?? null,
+        raw: d,
       };
+      const text = asString(d.text);
       if (text !== undefined) data.text = text;
+      const timestamp = asString(d.timestamp);
+      if (timestamp !== undefined) data.timestamp = timestamp;
       return { type: 'inbound.message', data };
     }
     default:

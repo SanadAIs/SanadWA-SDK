@@ -84,15 +84,31 @@ export interface Message {
 }
 
 /**
+ * Structured failure reason on a `message.failed` event. Mirrors the live API
+ * `data.error` object (`{ code, title, message }`) — NOT a bare string.
+ */
+export interface WebhookFailedError {
+  code: number | null;
+  title: string | null;
+  message: string | null;
+}
+
+/**
  * Discriminated union covering all webhook event types currently emitted by
  * the SANAD WhatsApp Public API. Narrow on `type` for exhaustive handling.
+ *
+ * The live wire envelope is `{ event, tenant_id, data }` (snake_case payload
+ * under `data`); the SDK narrows on `event` and maps the core `data` fields to
+ * camelCase. Every member also exposes `raw` — the full unmapped `data` object —
+ * so adopters can read fields the SDK does not surface (e.g. `provider_msg_id`,
+ * inbound `media`/`button`) without the SDK silently dropping them.
  */
 export type WebhookEvent =
-  | { type: 'message.sent'; data: { messageId: string; toPhone: string; templateName: string; templateLanguage: string; sentAt: string } }
-  | { type: 'message.delivered'; data: { messageId: string; deliveredAt: string } }
-  | { type: 'message.read'; data: { messageId: string; readAt: string } }
-  | { type: 'message.failed'; data: { messageId: string; error: string; failedAt: string } }
-  | { type: 'inbound.message'; data: { fromPhone: string; text?: string; messageType: string; raw: unknown } };
+  | { type: 'message.sent'; data: { messageId: string; toPhone: string; templateName: string; templateLanguage: string; sentAt: string; raw: Record<string, unknown> } }
+  | { type: 'message.delivered'; data: { messageId: string; deliveredAt: string; raw: Record<string, unknown> } }
+  | { type: 'message.read'; data: { messageId: string; readAt: string; raw: Record<string, unknown> } }
+  | { type: 'message.failed'; data: { messageId: string; failedAt: string; error: WebhookFailedError; raw: Record<string, unknown> } }
+  | { type: 'inbound.message'; data: { from: string; messageType: string; messageId: string | null; text?: string; timestamp?: string; raw: Record<string, unknown> } };
 
 export interface WebhookVerifyInput {
   rawBody: string | Uint8Array;

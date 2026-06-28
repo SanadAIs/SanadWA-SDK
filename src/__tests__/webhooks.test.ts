@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import crypto from 'node:crypto';
 import { verifyWebhook } from '../resources/webhooks.js';
-// Cross-validation against the canonical reference impl in SANAD_API.
-import { verifyHmac } from '../../../SANAD_API/scripts/lib/webhook-verify.mjs';
+// Cross-validation against the canonical reference impl in SanadWA-API.
+import { verifyHmac } from '../../../SanadWA-API/scripts/lib/webhook-verify.mjs';
 
 const SECRET = 'whsec_test_xxx';
 
 const sign = (secret: string, body: string): string =>
   'sha256=' + crypto.createHmac('sha256', secret).update(body).digest('hex');
 
-const env = (event_type: string, payload: Record<string, unknown>): string =>
-  JSON.stringify({ event_type, payload, sent_at: '2026-05-10T00:00:00Z' });
+// Live wire envelope: { event, tenant_id, data }.
+const env = (event: string, data: Record<string, unknown>): string =>
+  JSON.stringify({ event, tenant_id: 1, data });
 
 describe('verifyWebhook — happy path', () => {
   it('valid signature for message.sent → narrowed event', () => {
@@ -42,25 +43,73 @@ describe('verifyWebhook — happy path', () => {
 
   it.each([
     ['message.sent', { message_id: 'm', to_phone: '+1', template_name: 't', template_language: 'en', sent_at: 'now' }, 'message.sent'],
-    ['message.delivered', { message_id: 'm', delivered_at: 'now' }, 'message.delivered'],
-    ['message.read', { message_id: 'm', read_at: 'now' }, 'message.read'],
-    ['message.failed', { message_id: 'm', error: 'oops', failed_at: 'now' }, 'message.failed'],
-    ['inbound.message', { from_phone: '+1', text: 'hi', type: 'text', raw: { x: 1 } }, 'inbound.message'],
-  ] as const)('narrows %s correctly', (eventType, payload, expectedType) => {
-    const body = env(eventType, payload as Record<string, unknown>);
+    ['message.delivered', { message_id: 99, provider_msg_id: 'wamid.x', delivered_at: 'now' }, 'message.delivered'],
+    ['message.read', { message_id: 99, read_at: 'now' }, 'message.read'],
+    ['message.failed', { message_id: 99, failed_at: 'now', error: { code: 131049, title: 'failed', message: 'oops' } }, 'message.failed'],
+    ['inbound.message', { message_id: 'wamid.in', from: '+1', text: 'hi', type: 'text', timestamp: 'now' }, 'inbound.message'],
+  ] as const)('narrows %s correctly', (eventType, data, expectedType) => {
+    const body = env(eventType, data as Record<string, unknown>);
     const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
     expect(result.valid).toBe(true);
     if (result.valid) expect(result.event.type).toBe(expectedType);
   });
 
+  it('message.delivered with numeric message_id coerces to string id', () => {
+    const body = env('message.delivered', { message_id: 4242, delivered_at: 'now' });
+    const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
+    expect(result.valid).toBe(true);
+    if (result.valid && result.event.type === 'message.delivered') {
+      expect(result.event.data.messageId).toBe('4242');
+    }
+  });
+
+  it('message.failed exposes the structured error object', () => {
+    const body = env('message.failed', {
+      message_id: 7,
+      failed_at: 'now',
+      error: { code: 131049, title: 'Failed', message: 'spam-blocked' },
+    });
+    const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
+    expect(result.valid).toBe(true);
+    if (result.valid && result.event.type === 'message.failed') {
+      expect(result.event.data.error).toEqual({ code: 131049, title: 'Failed', message: 'spam-blocked' });
+    }
+  });
+
+  it('inbound.message uses live `from` field and exposes raw payload', () => {
+    const body = env('inbound.message', {
+      message_id: 'wamid.in',
+      from: '+966500000000',
+      type: 'text',
+      text: 'hi',
+      timestamp: '2026-05-10T00:00:00Z',
+    });
+    const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
+    expect(result.valid).toBe(true);
+    if (result.valid && result.event.type === 'inbound.message') {
+      expect(result.event.data.from).toBe('+966500000000');
+      expect(result.event.data.raw.from).toBe('+966500000000');
+    }
+  });
+
   it('inbound.message without text omits text field but stays valid', () => {
-    const body = env('inbound.message', { from_phone: '+1', type: 'image', raw: {} });
+    const body = env('inbound.message', { from: '+1', type: 'image' });
     const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
     expect(result.valid).toBe(true);
     if (result.valid && result.event.type === 'inbound.message') {
       expect(result.event.data.text).toBeUndefined();
       expect(result.event.data.messageType).toBe('image');
     }
+  });
+
+  it('legacy { event_type, payload } envelope still narrows (backward-compat)', () => {
+    const body = JSON.stringify({
+      event_type: 'message.delivered',
+      payload: { message_id: 'm', delivered_at: 'now' },
+    });
+    const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
+    expect(result.valid).toBe(true);
+    if (result.valid) expect(result.event.type).toBe('message.delivered');
   });
 });
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.1 — 2026-06-28
+
+Fixed (webhook envelope reconciliation):
+
+- **`verifyWebhook` now parses the LIVE webhook envelope `{ event, tenant_id,
+  data }`.** Prior versions expected `{ event_type, payload }`, so every real
+  delivery from the Public API narrowed to `unknown_event_type`. The legacy
+  `{ event_type, payload }` envelope is still accepted for backward-compat.
+- **`message.failed` `error` is now the structured object `{ code, title,
+  message }`** (new `WebhookFailedError` type), matching the live payload — it
+  was previously typed/validated as a bare string and would not narrow.
+- **`inbound.message` reads the live `from` field** (was `from_phone`), and now
+  exposes `messageId`, `timestamp`, and the full unmapped `raw` payload (so
+  `media`/`button` are reachable).
+- **Numeric `message_id` is coerced to a string id** — status events
+  (`message.delivered`/`read`/`failed`) emit the numeric DB row id, which the
+  string-only check previously rejected.
+- Every `WebhookEvent` member now carries `raw: Record<string, unknown>` — the
+  complete unmapped `data` object — so adopters never lose fields the SDK does
+  not explicitly surface.
+- `__testFixtures` updated to the live envelope; added
+  `createMessageSentFixture` and `createMessageFailedFixture`.
+- Repaired the cross-validation test import (`SANAD_API` → `SanadWA-API`).
+
+The HMAC signature algorithm is unchanged (`sha256=<hex>` over raw body bytes).
+
 ## 0.2.0 — 2026-05-10
 
 Added (Phase 60 OPS-V2-03 / OPS-V2-04 / SEC-06 documentation refresh):

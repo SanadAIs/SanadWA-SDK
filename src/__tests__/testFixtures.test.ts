@@ -84,8 +84,32 @@ describe('__testFixtures', () => {
     });
     expect(f.expectedEvent).toEqual({
       type: 'message.delivered',
-      data: { messageId: 'wamid.OVERRIDE', deliveredAt: '2030-01-01T00:00:00.000Z' },
+      data: {
+        messageId: 'wamid.OVERRIDE',
+        deliveredAt: '2030-01-01T00:00:00.000Z',
+        raw: {
+          message_id: 'wamid.OVERRIDE',
+          provider_msg_id: 'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED',
+          to_phone: '+966500000000',
+          delivered_at: '2030-01-01T00:00:00.000Z',
+        },
+      },
     });
+  });
+
+  it('createMessageSentFixture round-trips to {valid:true}', () => {
+    const f = __testFixtures.createMessageSentFixture();
+    const result = verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: f.secret });
+    expect(result).toEqual({ valid: true, event: f.expectedEvent });
+  });
+
+  it('createMessageFailedFixture round-trips with structured error', () => {
+    const f = __testFixtures.createMessageFailedFixture();
+    const result = verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: f.secret });
+    expect(result).toEqual({ valid: true, event: f.expectedEvent });
+    if (result.valid && result.event.type === 'message.failed') {
+      expect(result.event.data.error.code).toBe(131049);
+    }
   });
 
   it('createInboundMessageFixture honors overrides', () => {
