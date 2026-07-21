@@ -33,7 +33,9 @@ describe('SanadWhatsApp constructor', () => {
     expect(typeof c.health).toBe('function');
     expect(typeof c.templates.list).toBe('function');
     expect(typeof c.messages.send).toBe('function');
+    expect(typeof c.messages.sendText).toBe('function');
     expect(typeof c.messages.reply).toBe('function');
+    expect(c.messages.reply).toBe(c.messages.sendText);
     expect(typeof c.messages.get).toBe('function');
     expect(typeof c.webhooks.verify).toBe('function');
   });
@@ -146,7 +148,7 @@ describe('SanadWhatsApp.messages.send', () => {
   });
 });
 
-describe('SanadWhatsApp.messages.reply', () => {
+describe('SanadWhatsApp.messages.sendText', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -159,7 +161,7 @@ describe('SanadWhatsApp.messages.reply', () => {
       upstream: {},
     }));
     const sdk = new SanadWhatsApp({ apiKey: 'k', fetch: fetchImpl as unknown as typeof fetch });
-    const promise = sdk.messages.reply({
+    const promise = sdk.messages.sendText({
       phoneNumberId: 'PNID',
       toPhone: '+966500000000',
       text: 'How can we help?',

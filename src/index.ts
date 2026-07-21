@@ -41,6 +41,7 @@ export class SanadWhatsApp {
 
   readonly messages: {
     send: (opts: SendMessageOptions) => Promise<SendMessageResponse>;
+    sendText: (opts: SendTextReplyOptions) => Promise<SendTextReplyResponse>;
     reply: (opts: SendTextReplyOptions) => Promise<SendTextReplyResponse>;
     get: (id: string) => Promise<Message>;
   };
@@ -65,9 +66,12 @@ export class SanadWhatsApp {
     this.templates = {
       list: (o) => listTemplates(this.#req, o),
     };
+    const sendText = (o: SendTextReplyOptions): Promise<SendTextReplyResponse> =>
+      sendTextReply(this.#req, o);
     this.messages = {
       send: (o) => sendMessage(this.#req, o),
-      reply: (o) => sendTextReply(this.#req, o),
+      sendText,
+      reply: sendText,
       get: (id) => getMessage(this.#req, id),
     };
   }
@@ -104,6 +108,11 @@ export type {
   WebhookFailedError,
   WebhookVerifyInput,
   WebhookVerifyResult,
+} from './types.js';
+
+export type {
+  SendTextReplyOptions as SendTextOptions,
+  SendTextReplyResponse as SendTextResponse,
 } from './types.js';
 
 // Phase 60 OPS-V2-04 — webhook fixtures for adopter unit tests.

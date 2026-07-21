@@ -51,7 +51,7 @@ console.log(msg.status); // 'sent' | 'delivered' | 'read' | 'failed'
 After a customer sends an inbound WhatsApp message, reply with ordinary text:
 
 ```ts
-const reply = await sdk.messages.reply({
+const reply = await sdk.messages.sendText({
   phoneNumberId: 'YOUR_PHONE_NUMBER_ID',
   toPhone: '+966500000000',
   text: 'Thank you — how can we help?',
@@ -60,6 +60,8 @@ const reply = await sdk.messages.reply({
 
 console.log(reply.messageId);
 ```
+
+`sdk.messages.reply()` remains available as an alias for compatibility.
 
 Free-form text is limited to the active WhatsApp customer-service window for
 the exact sender and recipient. If the window is closed (or no inbound message
@@ -180,7 +182,7 @@ try {
 
 Built-in: 429 and 5xx responses are retried with exponential backoff (250ms × 2^n, capped at 30s, max 5 attempts). When the server returns `Retry-After`, that value is honored instead of the backoff math (the actual sleep is clamped to 30s; `RateLimitedError.retryAfterSec` still reports the raw server value). Override via `new SanadWhatsApp({ retries: 3 })`.
 
-Every `messages.send()` and `messages.reply()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer. Caller-supplied keys must contain 1–120 visible ASCII characters (`!` through `~`); invalid keys throw `ValidationError` before any HTTP request.
+Every `messages.send()` and `messages.sendText()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer. Caller-supplied keys must contain 1–120 visible ASCII characters (`!` through `~`); invalid keys throw `ValidationError` before any HTTP request.
 
 ## Configuration
 

@@ -8,7 +8,7 @@ use Psr\Http\Message\ResponseInterface;
 use Sanadwa\WhatsApp\Dto\Message;
 use Sanadwa\WhatsApp\Dto\SendMessageOptions;
 use Sanadwa\WhatsApp\Dto\SendMessageResponse;
-use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
+use Sanadwa\WhatsApp\Dto\SendTextOptions;
 use Sanadwa\WhatsApp\Dto\SendTextReplyResponse;
 use Sanadwa\WhatsApp\Dto\Upstream;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
@@ -41,7 +41,7 @@ final class Messages
         return $this->postMessage('/messages/template', $body, $options->idempotencyKey);
     }
 
-    public function reply(SendTextReplyOptions $options): SendTextReplyResponse
+    public function sendText(SendTextOptions $options): SendTextReplyResponse
     {
         $body = [
             'phone_number_id' => $options->phoneNumberId,
@@ -60,6 +60,11 @@ final class Messages
             replayed: $response->replayed,
             upstream: $response->upstream,
         );
+    }
+
+    public function reply(SendTextOptions $options): SendTextReplyResponse
+    {
+        return $this->sendText($options);
     }
 
     private function postMessage(

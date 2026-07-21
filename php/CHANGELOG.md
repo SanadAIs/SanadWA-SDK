@@ -2,9 +2,10 @@
 
 ## 0.3.0
 
-- Add `messages()->reply()` for free-form customer-service replies through
-  `POST /messages/text`.
-- Add `SendTextReplyOptions` and `SendTextReplyResponse` DTOs.
+- Add `messages()->sendText()` for free-form customer-service replies through
+  `POST /messages/text`, retaining `messages()->reply()` as an alias.
+- Add `SendTextOptions` and `SendTextReplyResponse` DTOs, retaining
+  `SendTextReplyOptions` as a compatibility alias.
 - Support template and text variants of `message.sent` webhooks through the
   `messageType` discriminator.
 - Allow `Message::$templateName` to be `null` for free-form replies.

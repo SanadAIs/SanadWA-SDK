@@ -4,9 +4,9 @@
 
 Added:
 
-- `sdk.messages.reply()` for free-form customer-service text replies through
-  `POST /messages/text`, with the same automatic idempotency behavior as
-  template sends.
+- `sdk.messages.sendText()` for free-form customer-service text replies through
+  `POST /messages/text`, with `sdk.messages.reply()` retained as an alias and
+  the same automatic idempotency behavior as template sends.
 - `message.sent` webhook narrowing now supports both template sends and text
   replies through the `messageType` discriminator.
 - Message lookup exposes `templateName: null` for free-form text replies.

@@ -97,10 +97,10 @@ configuring a second Meta access token:
 ```php
 <?php
 
-use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
+use Sanadwa\WhatsApp\Dto\SendTextOptions;
 use Sanadwa\WhatsApp\Laravel\Facades\SanadWhatsApp;
 
-$reply = SanadWhatsApp::messages()->reply(new SendTextReplyOptions(
+$reply = SanadWhatsApp::messages()->sendText(new SendTextOptions(
     phoneNumberId: config('services.whatsapp.phone_number_id'),
     toPhone: '+966500000000',
     text: 'Thank you — how can we help?',
@@ -108,8 +108,9 @@ $reply = SanadWhatsApp::messages()->reply(new SendTextReplyOptions(
 ));
 ```
 
-An application's `sendText()` provider method should call
-`messages()->reply()` as shown above. Do not route free-form replies directly
+`messages()->reply()` remains available as a compatibility alias. An
+application's `sendText()` provider method should call `messages()->sendText()`
+as shown above. Do not route free-form replies directly
 to Meta and do not wrap them in a passthrough template. SANAD returns
 `409 customer_service_window_closed` when the recipient has no active
 customer-service window; send an approved template in that case.
@@ -222,7 +223,7 @@ Every `messages()->send()` call uses one `Idempotency-Key` header across every r
 | `timeout` | `30.0` | Total request timeout in seconds for the default client |
 | `connectTimeout` | `10.0` | Connection timeout in seconds for the default client |
 | `httpClient` | `GuzzleHttp\Client` | Any injectable PSR-18 client; caller-supplied clients are used untouched |
-| `userAgent` | `@sanadwa/whatsapp-sdk-php/0.2.2` | Override for diagnostics |
+| `userAgent` | `@sanadwa/whatsapp-sdk-php/0.3.0` | Override for diagnostics |
 
 ## License
 

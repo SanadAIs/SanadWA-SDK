@@ -140,7 +140,7 @@ describe('messages.send', () => {
   });
 });
 
-describe('messages.reply', () => {
+describe('messages.sendText resource', () => {
   it('POSTs free-form text to /messages/text with idempotency', async () => {
     const calls: RequestOptions[] = [];
     const req = mkRequester(async <T>(opts: RequestOptions) => {
