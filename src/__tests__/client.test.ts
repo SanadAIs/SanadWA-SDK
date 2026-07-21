@@ -33,6 +33,7 @@ describe('SanadWhatsApp constructor', () => {
     expect(typeof c.health).toBe('function');
     expect(typeof c.templates.list).toBe('function');
     expect(typeof c.messages.send).toBe('function');
+    expect(typeof c.messages.reply).toBe('function');
     expect(typeof c.messages.get).toBe('function');
     expect(typeof c.webhooks.verify).toBe('function');
   });
@@ -108,7 +109,7 @@ describe('SanadWhatsApp.messages.send', () => {
     });
     const headers = init.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(UUID_RE);
-    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.2.2');
+    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.3.0');
   });
 
   it('UUID is reused across retries (D-08 invariant)', async () => {
@@ -142,6 +143,43 @@ describe('SanadWhatsApp.messages.send', () => {
     expect(error).toBeInstanceOf(ValidationError);
     expect((error as ValidationError).code).toBe('invalid_idempotency_key');
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('SanadWhatsApp.messages.reply', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('POSTs a text reply and generates an Idempotency-Key', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, {
+      success: true,
+      message_id: 'wamid.TEXT',
+      message_type: 'text',
+      accepted_at: 'now',
+      upstream: {},
+    }));
+    const sdk = new SanadWhatsApp({ apiKey: 'k', fetch: fetchImpl as unknown as typeof fetch });
+    const promise = sdk.messages.reply({
+      phoneNumberId: 'PNID',
+      toPhone: '+966500000000',
+      text: 'How can we help?',
+      previewUrl: false,
+    });
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(fetchImpl.mock.calls[0]![0]).toBe(
+      'https://api.sanadwa.com/api/public/v1/messages/text',
+    );
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      phone_number_id: 'PNID',
+      to_phone: '+966500000000',
+      text: 'How can we help?',
+      preview_url: false,
+    });
+    expect((init.headers as Record<string, string>)['Idempotency-Key']).toMatch(UUID_RE);
+    expect(result.messageType).toBe('text');
   });
 });
 

@@ -12,7 +12,7 @@
 import { createRequester, type Requester } from './request.js';
 import { health } from './resources/health.js';
 import { listTemplates } from './resources/templates.js';
-import { sendMessage, getMessage } from './resources/messages.js';
+import { sendMessage, sendTextReply, getMessage } from './resources/messages.js';
 import { verifyWebhook } from './resources/webhooks.js';
 import type {
   ClientOptions,
@@ -22,13 +22,15 @@ import type {
   Message,
   SendMessageOptions,
   SendMessageResponse,
+  SendTextReplyOptions,
+  SendTextReplyResponse,
   WebhookVerifyInput,
   WebhookVerifyResult,
 } from './types.js';
 
 const DEFAULT_BASE_URL = 'https://api.sanadwa.com/api/public/v1';
 const DEFAULT_RETRIES = 5;
-const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.2.2';
+const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.3.0';
 
 export class SanadWhatsApp {
   readonly #req: Requester;
@@ -39,6 +41,7 @@ export class SanadWhatsApp {
 
   readonly messages: {
     send: (opts: SendMessageOptions) => Promise<SendMessageResponse>;
+    reply: (opts: SendTextReplyOptions) => Promise<SendTextReplyResponse>;
     get: (id: string) => Promise<Message>;
   };
 
@@ -64,6 +67,7 @@ export class SanadWhatsApp {
     };
     this.messages = {
       send: (o) => sendMessage(this.#req, o),
+      reply: (o) => sendTextReply(this.#req, o),
       get: (id) => getMessage(this.#req, id),
     };
   }
@@ -92,7 +96,10 @@ export type {
   ListTemplatesResponse,
   SendMessageOptions,
   SendMessageResponse,
+  SendTextReplyOptions,
+  SendTextReplyResponse,
   Message,
+  MessageSentWebhookData,
   WebhookEvent,
   WebhookFailedError,
   WebhookVerifyInput,

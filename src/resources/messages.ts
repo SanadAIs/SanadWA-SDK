@@ -3,6 +3,8 @@ import type {
   Message,
   SendMessageOptions,
   SendMessageResponse,
+  SendTextReplyOptions,
+  SendTextReplyResponse,
 } from '../types.js';
 import { ValidationError } from '../errors.js';
 
@@ -38,23 +40,13 @@ interface MessageWire {
 
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]+$/;
 
-/**
- * POST /messages/template — send an approved WhatsApp template message.
- *
- * The SDK sends the caller's `Idempotency-Key`, or generates a UUID v4 when
- * absent. The same value is reused across retries so duplicate sends are
- * impossible.
- */
-export const sendMessage = async (
-  req: Requester,
-  opts: SendMessageOptions,
-): Promise<SendMessageResponse> => {
+const validateIdempotencyKey = (idempotencyKey: string | undefined): void => {
   if (
-    opts.idempotencyKey !== undefined
-    && (typeof opts.idempotencyKey !== 'string'
-      || opts.idempotencyKey.length === 0
-      || opts.idempotencyKey.length > 120
-      || !IDEMPOTENCY_KEY_PATTERN.test(opts.idempotencyKey))
+    idempotencyKey !== undefined
+    && (typeof idempotencyKey !== 'string'
+      || idempotencyKey.length === 0
+      || idempotencyKey.length > 120
+      || !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey))
   ) {
     throw new ValidationError({
       message: '`idempotencyKey` must contain 1 to 120 visible ASCII characters.',
@@ -62,26 +54,24 @@ export const sendMessage = async (
       status: 0,
     });
   }
+};
 
-  const body: Record<string, unknown> = {
-    phone_number_id: opts.phoneNumberId,
-    to_phone: opts.toPhone,
-    template_name: opts.templateName,
-  };
-  if (opts.templateLanguage !== undefined) body.template_language = opts.templateLanguage;
-  if (opts.templateParams !== undefined) body.template_params = opts.templateParams;
-  if (opts.templateComponents !== undefined) body.template_components = opts.templateComponents;
-  if (opts.idempotencyKey !== undefined) body.idempotency_key = opts.idempotencyKey;
+const postMessage = async (
+  req: Requester,
+  path: '/messages/template' | '/messages/text',
+  body: Record<string, unknown>,
+  idempotencyKey: string | undefined,
+): Promise<SendMessageResponse> => {
+  validateIdempotencyKey(idempotencyKey);
+  if (idempotencyKey !== undefined) body.idempotency_key = idempotencyKey;
 
   let replayed = false;
   const raw = await req<SendWire>({
     method: 'POST',
-    path: '/messages/template',
+    path,
     body,
     idempotent: true,
-    ...(opts.idempotencyKey !== undefined
-      ? { idempotencyKey: opts.idempotencyKey }
-      : {}),
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     onHeaders: (h) => {
       replayed = h.get('x-idempotent-replay') === 'true';
     },
@@ -97,6 +87,50 @@ export const sendMessage = async (
       messages: raw.upstream?.messages ?? [],
     },
   };
+};
+
+/**
+ * POST /messages/template — send an approved WhatsApp template message.
+ *
+ * The SDK sends the caller's `Idempotency-Key`, or generates a UUID v4 when
+ * absent. The same value is reused across retries so duplicate sends are
+ * impossible.
+ */
+export const sendMessage = async (
+  req: Requester,
+  opts: SendMessageOptions,
+): Promise<SendMessageResponse> => {
+  const body: Record<string, unknown> = {
+    phone_number_id: opts.phoneNumberId,
+    to_phone: opts.toPhone,
+    template_name: opts.templateName,
+  };
+  if (opts.templateLanguage !== undefined) body.template_language = opts.templateLanguage;
+  if (opts.templateParams !== undefined) body.template_params = opts.templateParams;
+  if (opts.templateComponents !== undefined) body.template_components = opts.templateComponents;
+  return postMessage(req, '/messages/template', body, opts.idempotencyKey);
+};
+
+/**
+ * POST /messages/text — send a free-form customer-service reply.
+ *
+ * The recipient must have sent an inbound message to the selected sender
+ * during the active WhatsApp customer-service window. Outside that window the
+ * API rejects with `customer_service_window_closed`; use a template instead.
+ */
+export const sendTextReply = async (
+  req: Requester,
+  opts: SendTextReplyOptions,
+): Promise<SendTextReplyResponse> => {
+  const body: Record<string, unknown> = {
+    phone_number_id: opts.phoneNumberId,
+    to_phone: opts.toPhone,
+    text: opts.text,
+  };
+  if (opts.previewUrl !== undefined) body.preview_url = opts.previewUrl;
+
+  const result = await postMessage(req, '/messages/text', body, opts.idempotencyKey);
+  return { ...result, messageType: 'text' };
 };
 
 /**

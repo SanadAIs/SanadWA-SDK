@@ -29,8 +29,34 @@ describe('verifyWebhook — happy path', () => {
       if (result.event.type === 'message.sent') {
         expect(result.event.data.messageId).toBe('msg_1');
         expect(result.event.data.toPhone).toBe('+962790000000');
+        expect(result.event.data.messageType).toBe('template');
         expect(result.event.data.templateLanguage).toBe('en');
       }
+    }
+  });
+
+  it('valid text message.sent → narrowed free-form reply event', () => {
+    const body = env('message.sent', {
+      message_id: 'wamid.TEXT',
+      message_type: 'text',
+      to_phone: '+966500000000',
+      text: 'How can we help?',
+      template_name: null,
+      template_language: null,
+      sent_at: '2026-07-21T12:00:00Z',
+    });
+    const result = verifyWebhook({ rawBody: body, signature: sign(SECRET, body), secret: SECRET });
+
+    expect(result.valid).toBe(true);
+    if (result.valid && result.event.type === 'message.sent') {
+      expect(result.event.data).toMatchObject({
+        messageId: 'wamid.TEXT',
+        messageType: 'text',
+        toPhone: '+966500000000',
+        text: 'How can we help?',
+        templateName: null,
+        templateLanguage: null,
+      });
     }
   });
 

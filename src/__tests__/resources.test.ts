@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { health } from '../resources/health.js';
 import { listTemplates } from '../resources/templates.js';
-import { sendMessage, getMessage } from '../resources/messages.js';
+import { sendMessage, sendTextReply, getMessage } from '../resources/messages.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import type { Requester, RequestOptions } from '../request.js';
 
@@ -136,6 +136,63 @@ describe('messages.send', () => {
 
     expect(error).toBeInstanceOf(ValidationError);
     expect((error as ValidationError).code).toBe('invalid_idempotency_key');
+    expect(req).not.toHaveBeenCalled();
+  });
+});
+
+describe('messages.reply', () => {
+  it('POSTs free-form text to /messages/text with idempotency', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      if (opts.onHeaders) {
+        opts.onHeaders(new Headers({ 'x-idempotent-replay': 'true' }));
+      }
+      return {
+        success: true,
+        message_id: 'wamid.TEXT',
+        message_type: 'text',
+        accepted_at: '2026-07-21T12:00:00Z',
+        upstream: { messaging_product: 'whatsapp', contacts: [], messages: [] },
+      } as unknown as T;
+    });
+
+    const out = await sendTextReply(req, {
+      phoneNumberId: 'PNID',
+      toPhone: '+966500000000',
+      text: 'How can we help?',
+      previewUrl: false,
+      idempotencyKey: 'reply_001',
+    });
+
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/messages/text',
+      idempotent: true,
+      idempotencyKey: 'reply_001',
+      body: {
+        phone_number_id: 'PNID',
+        to_phone: '+966500000000',
+        text: 'How can we help?',
+        preview_url: false,
+        idempotency_key: 'reply_001',
+      },
+    });
+    expect(out.messageId).toBe('wamid.TEXT');
+    expect(out.messageType).toBe('text');
+    expect(out.replayed).toBe(true);
+  });
+
+  it('rejects an unsafe idempotency key before invoking the requester', async () => {
+    const req = vi.fn();
+    const error = await sendTextReply(req as unknown as Requester, {
+      phoneNumberId: 'PNID',
+      toPhone: '+966500000000',
+      text: 'Hello',
+      idempotencyKey: 'bad key',
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
     expect(req).not.toHaveBeenCalled();
   });
 });

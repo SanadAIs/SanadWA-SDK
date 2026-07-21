@@ -90,7 +90,19 @@ export const createMessageSentFixture = (
   };
   return buildFixture(
     { event: 'message.sent', tenant_id: DEFAULT_TENANT_ID, data },
-    { type: 'message.sent', data: { messageId, toPhone, templateName, templateLanguage, sentAt, raw: data } },
+    {
+      type: 'message.sent',
+      data: {
+        messageId,
+        messageType: 'template',
+        toPhone,
+        templateName,
+        templateLanguage,
+        text: null,
+        sentAt,
+        raw: data,
+      },
+    },
     overrides.secret,
   );
 };

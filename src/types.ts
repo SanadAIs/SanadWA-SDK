@@ -70,6 +70,21 @@ export interface SendMessageResponse {
   };
 }
 
+export interface SendTextReplyOptions {
+  phoneNumberId: string;
+  toPhone: string;
+  /** Free-form reply body. WhatsApp allows this only during an active customer-service window. */
+  text: string;
+  /** Ask WhatsApp to render a link preview (default: false). */
+  previewUrl?: boolean;
+  /** Exact `Idempotency-Key` header value: 1–120 visible ASCII characters. */
+  idempotencyKey?: string;
+}
+
+export interface SendTextReplyResponse extends SendMessageResponse {
+  messageType: 'text';
+}
+
 export interface Message {
   id: string;
   providerMsgId: string | null;
@@ -106,8 +121,30 @@ export interface WebhookFailedError {
  * so adopters can read fields the SDK does not surface (e.g. `provider_msg_id`,
  * inbound `media`/`button`) without the SDK silently dropping them.
  */
+export type MessageSentWebhookData =
+  | {
+      messageId: string;
+      messageType: 'template';
+      toPhone: string;
+      templateName: string;
+      templateLanguage: string;
+      text: null;
+      sentAt: string;
+      raw: Record<string, unknown>;
+    }
+  | {
+      messageId: string;
+      messageType: 'text';
+      toPhone: string;
+      templateName: null;
+      templateLanguage: null;
+      text: string;
+      sentAt: string;
+      raw: Record<string, unknown>;
+    };
+
 export type WebhookEvent =
-  | { type: 'message.sent'; data: { messageId: string; toPhone: string; templateName: string; templateLanguage: string; sentAt: string; raw: Record<string, unknown> } }
+  | { type: 'message.sent'; data: MessageSentWebhookData }
   | { type: 'message.delivered'; data: { messageId: string; deliveredAt: string; raw: Record<string, unknown> } }
   | { type: 'message.read'; data: { messageId: string; readAt: string; raw: Record<string, unknown> } }
   | { type: 'message.failed'; data: { messageId: string; failedAt: string; error: WebhookFailedError; raw: Record<string, unknown> } }

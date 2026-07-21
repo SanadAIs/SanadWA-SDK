@@ -67,11 +67,46 @@ const narrowWebhookEvent = (parsed: unknown): WebhookEvent | null => {
     case 'message.sent': {
       const messageId = asId(d.message_id);
       const toPhone = asString(d.to_phone);
+      const sentAt = asString(d.sent_at);
+      if (!messageId || !toPhone || !sentAt) return null;
+
+      const declaredType = asString(d.message_type);
+      const inferredType = declaredType ?? (asString(d.text) ? 'text' : 'template');
+      if (inferredType === 'text') {
+        const text = asString(d.text);
+        if (!text) return null;
+        return {
+          type: 'message.sent',
+          data: {
+            messageId,
+            messageType: 'text',
+            toPhone,
+            templateName: null,
+            templateLanguage: null,
+            text,
+            sentAt,
+            raw: d,
+          },
+        };
+      }
+      if (inferredType !== 'template') return null;
+
       const templateName = asString(d.template_name);
       const templateLanguage = asString(d.template_language);
-      const sentAt = asString(d.sent_at);
-      if (!messageId || !toPhone || !templateName || !templateLanguage || !sentAt) return null;
-      return { type: 'message.sent', data: { messageId, toPhone, templateName, templateLanguage, sentAt, raw: d } };
+      if (!templateName || !templateLanguage) return null;
+      return {
+        type: 'message.sent',
+        data: {
+          messageId,
+          messageType: 'template',
+          toPhone,
+          templateName,
+          templateLanguage,
+          text: null,
+          sentAt,
+          raw: d,
+        },
+      };
     }
     case 'message.delivered': {
       const messageId = asId(d.message_id);

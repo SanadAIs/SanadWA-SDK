@@ -37,6 +37,27 @@ const msg = await sdk.messages.get(result.messageId!);
 console.log(msg.status); // 'sent' | 'delivered' | 'read' | 'failed'
 ```
 
+## Free-form customer replies
+
+After a customer sends an inbound WhatsApp message, reply with ordinary text:
+
+```ts
+const reply = await sdk.messages.reply({
+  phoneNumberId: 'YOUR_PHONE_NUMBER_ID',
+  toPhone: '+966500000000',
+  text: 'Thank you — how can we help?',
+  previewUrl: false,
+});
+
+console.log(reply.messageId);
+```
+
+Free-form text is limited to the active WhatsApp customer-service window for
+the exact sender and recipient. If the window is closed (or no inbound message
+exists), the API returns `409 customer_service_window_closed`; send an approved
+template with `sdk.messages.send()` to reopen the conversation. Both methods
+use automatic idempotency keys.
+
 ## Webhooks
 
 ### Signature contract
@@ -150,7 +171,7 @@ try {
 
 Built-in: 429 and 5xx responses are retried with exponential backoff (250ms × 2^n, capped at 30s, max 5 attempts). When the server returns `Retry-After`, that value is honored instead of the backoff math (the actual sleep is clamped to 30s; `RateLimitedError.retryAfterSec` still reports the raw server value). Override via `new SanadWhatsApp({ retries: 3 })`.
 
-Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer. Caller-supplied keys must contain 1–120 visible ASCII characters (`!` through `~`); invalid keys throw `ValidationError` before any HTTP request.
+Every `messages.send()` and `messages.reply()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer. Caller-supplied keys must contain 1–120 visible ASCII characters (`!` through `~`); invalid keys throw `ValidationError` before any HTTP request.
 
 ## Configuration
 
@@ -160,7 +181,7 @@ Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. T
 | `baseUrl`    | `https://api.sanadwa.com/api/public/v1`       | Override for staging                    |
 | `retries`    | `5`                                            | Total attempts including the first      |
 | `fetch`      | `globalThis.fetch`                             | Inject for testing                      |
-| `userAgent`  | `@sanadwa/whatsapp-sdk/0.2.2`                 | Override for diagnostics                |
+| `userAgent`  | `@sanadwa/whatsapp-sdk/0.3.0`                 | Override for diagnostics                |
 
 ## License
 
