@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import crypto from 'node:crypto';
 import { verifyWebhook } from '../resources/webhooks.js';
 // Cross-validation against the canonical reference impl in SanadWA-API.
-import { verifyHmac } from '../../../SanadWA-API/scripts/lib/webhook-verify.mjs';
+import { verifyHmac } from '../../../SanadWA/API/scripts/lib/webhook-verify.mjs';
 
 const SECRET = 'whsec_test_xxx';
 

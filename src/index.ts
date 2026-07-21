@@ -28,7 +28,7 @@ import type {
 
 const DEFAULT_BASE_URL = 'https://api.sanadwa.com/api/public/v1';
 const DEFAULT_RETRIES = 5;
-const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.2.1';
+const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.2.2';
 
 export class SanadWhatsApp {
   readonly #req: Requester;

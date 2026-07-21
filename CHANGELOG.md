@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2 — 2026-07-21
+
+Fixed:
+
+- Caller-supplied idempotency keys are restricted to 1–120 visible ASCII
+  characters and sent as the authoritative `Idempotency-Key` header, while
+  retaining the JSON body field for backward compatibility. Invalid keys fail
+  before HTTP work; generated and caller-supplied keys remain stable on retries.
+- Numeric `/health` `tenant_id` values are coerced to the public string type.
+- `Retry-After` sleep is capped at 30 seconds while `RateLimitedError` retains
+  the server's uncapped retry guidance.
+- All HTTP error subclasses preserve `message_ar`, `details`, `upstream_code`,
+  and the decoded raw response body.
+
 ## 0.2.1 — 2026-06-28
 
 Fixed (webhook envelope reconciliation):

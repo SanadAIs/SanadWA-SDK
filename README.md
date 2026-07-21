@@ -124,7 +124,11 @@ All HTTP errors subclass `SanadApiError`:
 - `ValidationError` (400, 409 `idempotency_conflict`)
 - `AuthError` (401/403)
 - `NotFoundError` (404)
-- `ServerError` (5xx, network failures) — exposes optional `upstreamCode`
+- `ServerError` (5xx, network failures)
+
+Every error also exposes the upstream detail the server forwarded: optional
+`messageAr`, `details`, `upstreamCode` (e.g. Meta error codes on `send_failed`),
+and the raw error body via `rawBody` — on every status, not just 5xx.
 
 ```ts
 import { SanadApiError, RateLimitedError } from '@sanadwa/whatsapp-sdk';
@@ -144,9 +148,9 @@ try {
 
 ## Retry & Idempotency
 
-Built-in: 429 and 5xx responses are retried with exponential backoff (250ms × 2^n, capped at 30s, max 5 attempts). When the server returns `Retry-After`, that value is honored instead of the backoff math. Override via `new SanadWhatsApp({ retries: 3 })`.
+Built-in: 429 and 5xx responses are retried with exponential backoff (250ms × 2^n, capped at 30s, max 5 attempts). When the server returns `Retry-After`, that value is honored instead of the backoff math (the actual sleep is clamped to 30s; `RateLimitedError.retryAfterSec` still reports the raw server value). Override via `new SanadWhatsApp({ retries: 3 })`.
 
-Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer.
+Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. The same UUID is reused across all retries of one logical call, so the server caches and replays the response — your message is sent at most once. Pass your own via `idempotencyKey` if you prefer. Caller-supplied keys must contain 1–120 visible ASCII characters (`!` through `~`); invalid keys throw `ValidationError` before any HTTP request.
 
 ## Configuration
 
@@ -156,7 +160,7 @@ Every `messages.send()` call generates a UUID `Idempotency-Key` automatically. T
 | `baseUrl`    | `https://api.sanadwa.com/api/public/v1`       | Override for staging                    |
 | `retries`    | `5`                                            | Total attempts including the first      |
 | `fetch`      | `globalThis.fetch`                             | Inject for testing                      |
-| `userAgent`  | `@sanadwa/whatsapp-sdk/0.1.0`                 | Override for diagnostics                |
+| `userAgent`  | `@sanadwa/whatsapp-sdk/0.2.2`                 | Override for diagnostics                |
 
 ## License
 

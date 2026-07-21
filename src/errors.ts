@@ -10,6 +10,10 @@ export interface SanadApiErrorArgs {
   code: string;
   status: number;
   requestId?: string | undefined;
+  messageAr?: string | null | undefined;
+  details?: Record<string, unknown> | unknown[] | undefined;
+  upstreamCode?: string | null | undefined;
+  rawBody?: Record<string, unknown> | undefined;
   cause?: unknown;
 }
 
@@ -17,6 +21,10 @@ export class SanadApiError extends Error {
   public readonly code: string;
   public readonly status: number;
   public readonly requestId: string | undefined;
+  public readonly messageAr: string | null;
+  public readonly details: Record<string, unknown> | unknown[];
+  public readonly upstreamCode: string | null;
+  public readonly rawBody: Record<string, unknown>;
 
   constructor(args: SanadApiErrorArgs) {
     super(args.message, args.cause !== undefined ? { cause: args.cause } : undefined);
@@ -25,6 +33,10 @@ export class SanadApiError extends Error {
     this.code = args.code;
     this.status = args.status;
     this.requestId = args.requestId;
+    this.messageAr = args.messageAr ?? null;
+    this.details = args.details ?? [];
+    this.upstreamCode = args.upstreamCode ?? null;
+    this.rawBody = args.rawBody ?? {};
   }
 }
 
@@ -45,18 +57,9 @@ export class ValidationError extends SanadApiError {}
 export class AuthError extends SanadApiError {}
 export class NotFoundError extends SanadApiError {}
 
-export interface ServerErrorArgs extends SanadApiErrorArgs {
-  upstreamCode?: string | null;
-}
+export interface ServerErrorArgs extends SanadApiErrorArgs {}
 
-export class ServerError extends SanadApiError {
-  public readonly upstreamCode: string | null;
-
-  constructor(args: ServerErrorArgs) {
-    super(args);
-    this.upstreamCode = args.upstreamCode ?? null;
-  }
-}
+export class ServerError extends SanadApiError {}
 
 export const isSanadApiError = (e: unknown): e is SanadApiError =>
   e instanceof SanadApiError;

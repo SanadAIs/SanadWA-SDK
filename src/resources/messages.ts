@@ -4,6 +4,7 @@ import type {
   SendMessageOptions,
   SendMessageResponse,
 } from '../types.js';
+import { ValidationError } from '../errors.js';
 
 interface SendWire {
   success: true;
@@ -35,16 +36,33 @@ interface MessageWire {
   };
 }
 
+const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]+$/;
+
 /**
  * POST /messages/template — send an approved WhatsApp template message.
  *
- * The SDK auto-generates an `Idempotency-Key` UUID v4. The same UUID is
- * reused across retries so duplicate sends are impossible.
+ * The SDK sends the caller's `Idempotency-Key`, or generates a UUID v4 when
+ * absent. The same value is reused across retries so duplicate sends are
+ * impossible.
  */
 export const sendMessage = async (
   req: Requester,
   opts: SendMessageOptions,
 ): Promise<SendMessageResponse> => {
+  if (
+    opts.idempotencyKey !== undefined
+    && (typeof opts.idempotencyKey !== 'string'
+      || opts.idempotencyKey.length === 0
+      || opts.idempotencyKey.length > 120
+      || !IDEMPOTENCY_KEY_PATTERN.test(opts.idempotencyKey))
+  ) {
+    throw new ValidationError({
+      message: '`idempotencyKey` must contain 1 to 120 visible ASCII characters.',
+      code: 'invalid_idempotency_key',
+      status: 0,
+    });
+  }
+
   const body: Record<string, unknown> = {
     phone_number_id: opts.phoneNumberId,
     to_phone: opts.toPhone,
@@ -61,6 +79,9 @@ export const sendMessage = async (
     path: '/messages/template',
     body,
     idempotent: true,
+    ...(opts.idempotencyKey !== undefined
+      ? { idempotencyKey: opts.idempotencyKey }
+      : {}),
     onHeaders: (h) => {
       replayed = h.get('x-idempotent-replay') === 'true';
     },

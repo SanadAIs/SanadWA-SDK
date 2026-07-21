@@ -5,6 +5,7 @@ import {
   RateLimitedError,
   NotFoundError,
   ServerError,
+  ValidationError,
   isSanadApiError,
 } from '../index.js';
 
@@ -107,6 +108,7 @@ describe('SanadWhatsApp.messages.send', () => {
     });
     const headers = init.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(UUID_RE);
+    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.2.2');
   });
 
   it('UUID is reused across retries (D-08 invariant)', async () => {
@@ -121,6 +123,25 @@ describe('SanadWhatsApp.messages.send', () => {
     const k2 = (fetchImpl.mock.calls[1]![1].headers as Record<string, string>)['Idempotency-Key'];
     expect(k1).toMatch(UUID_RE);
     expect(k1).toBe(k2);
+  });
+
+  it('rejects an unsafe caller idempotency key before invoking a custom fetch', async () => {
+    const fetchImpl = vi.fn();
+    const sdk = new SanadWhatsApp({
+      apiKey: 'k',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+
+    const error = await sdk.messages.send({
+      phoneNumberId: 'P',
+      toPhone: '+1',
+      templateName: 't',
+      idempotencyKey: 'abc\r\nX-Evil: 1',
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).code).toBe('invalid_idempotency_key');
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

@@ -29,8 +29,10 @@ export interface RequestOptions {
   path: string;
   query?: Record<string, string | number | boolean | undefined> | undefined;
   body?: unknown;
-  /** When true, generate a UUID `Idempotency-Key` header (reused across retries). */
+  /** When true, send one `Idempotency-Key` header reused across retries. */
   idempotent?: boolean;
+  /** Exact caller-supplied header value; a UUID is generated when omitted. */
+  idempotencyKey?: string;
   /** Callback invoked once per attempt with the final (non-retried) response headers. */
   onHeaders?: (headers: Headers) => void;
 }
@@ -38,10 +40,13 @@ export interface RequestOptions {
 export type Requester = <T>(opts: RequestOptions) => Promise<T>;
 
 interface ErrorBody {
+  [key: string]: unknown;
   success?: false;
-  code?: string;
-  message?: string;
-  upstream_code?: string | null;
+  code?: unknown;
+  message?: unknown;
+  message_ar?: unknown;
+  details?: unknown;
+  upstream_code?: unknown;
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -75,10 +80,18 @@ export const parseRetryAfter = (header: string | null): number | null => {
  * Schedule: 250ms × 2^(attempt-1), capped at 30000ms.
  */
 export const computeBackoff = (attempt: number, retryAfterMs: number | null): number => {
-  if (retryAfterMs != null) return retryAfterMs;
+  if (retryAfterMs != null) return Math.min(30_000, retryAfterMs);
   const exp = 250 * 2 ** (attempt - 1);
   return Math.min(30_000, exp);
 };
+
+const scalarString = (value: unknown): string | null =>
+  typeof value === 'string' || typeof value === 'number' ? String(value) : null;
+
+const errorDetails = (value: unknown): Record<string, unknown> | unknown[] =>
+  value !== null && typeof value === 'object'
+    ? value as Record<string, unknown> | unknown[]
+    : [];
 
 const isRetryable = (status: number, code: string): boolean => {
   if (status === 429) return true;
@@ -93,34 +106,43 @@ const mapErrorResponse = (
   requestId: string | undefined,
   retryAfterSec: number | null,
 ): SanadApiError => {
-  const code = String(body.code ?? 'unknown_error');
-  const message = String(body.message ?? `Request failed with status ${status}`);
-  const upstreamCode = body.upstream_code ?? null;
+  const code = scalarString(body.code) ?? 'unknown_error';
+  const message = scalarString(body.message) ?? `Request failed with status ${status}`;
+  const commonArgs = {
+    message,
+    code,
+    status,
+    requestId,
+    messageAr: scalarString(body.message_ar),
+    details: errorDetails(body.details),
+    upstreamCode: scalarString(body.upstream_code),
+    rawBody: body,
+  };
 
   if (status === 400) {
-    return new ValidationError({ message, code, status, requestId });
+    return new ValidationError(commonArgs);
   }
   if (status === 401 || status === 403) {
-    return new AuthError({ message, code, status, requestId });
+    return new AuthError(commonArgs);
   }
   if (status === 404) {
-    return new NotFoundError({ message, code, status, requestId });
+    return new NotFoundError(commonArgs);
   }
   if (status === 409) {
     if (code === 'idempotency_in_progress') {
-      return new RateLimitedError({ message, code, status, requestId, retryAfterSec });
+      return new RateLimitedError({ ...commonArgs, retryAfterSec });
     }
     // idempotency_conflict and other 409s: client-side bug, NOT retryable.
-    return new ValidationError({ message, code, status, requestId });
+    return new ValidationError(commonArgs);
   }
   if (status === 429) {
-    return new RateLimitedError({ message, code, status, requestId, retryAfterSec });
+    return new RateLimitedError({ ...commonArgs, retryAfterSec });
   }
   if (status >= 500 && status < 600) {
-    return new ServerError({ message, code, status, requestId, upstreamCode });
+    return new ServerError(commonArgs);
   }
   // Fallback for unexpected statuses.
-  return new SanadApiError({ message, code, status, requestId });
+  return new SanadApiError(commonArgs);
 };
 
 const buildUrl = (
@@ -149,7 +171,7 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
 
   return async <T>(reqOpts: RequestOptions): Promise<T> => {
     const idempotencyKey = reqOpts.idempotent === true
-      ? globalThis.crypto.randomUUID()
+      ? (reqOpts.idempotencyKey ?? globalThis.crypto.randomUUID())
       : null;
 
     const url = buildUrl(baseUrl, reqOpts.path, reqOpts.query);
@@ -203,12 +225,17 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       let bodyJson: ErrorBody = {};
       try {
         const text = await res.text();
-        if (text.length > 0) bodyJson = JSON.parse(text) as ErrorBody;
+        if (text.length > 0) {
+          const decoded = JSON.parse(text) as unknown;
+          if (decoded !== null && typeof decoded === 'object' && !Array.isArray(decoded)) {
+            bodyJson = decoded as ErrorBody;
+          }
+        }
       } catch {
         bodyJson = {};
       }
 
-      const code = String(bodyJson.code ?? 'unknown_error');
+      const code = scalarString(bodyJson.code) ?? 'unknown_error';
       const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
       const retryAfterSec = retryAfterMs != null ? Math.ceil(retryAfterMs / 1000) : null;
 

@@ -5,6 +5,7 @@ import {
   computeBackoff,
 } from '../request.js';
 import {
+  SanadApiError,
   RateLimitedError,
   ValidationError,
   AuthError,
@@ -72,9 +73,10 @@ describe('computeBackoff', () => {
     expect(computeBackoff(20, null)).toBe(30_000);
   });
 
-  it('honors retryAfterMs override', () => {
+  it('honors retryAfterMs override up to the 30000ms cap', () => {
     expect(computeBackoff(1, 5000)).toBe(5000);
     expect(computeBackoff(7, 100)).toBe(100);
+    expect(computeBackoff(1, 3_600_000)).toBe(30_000);
   });
 });
 
@@ -124,6 +126,29 @@ describe('createRequester', () => {
     }
   });
 
+  it('Caller Idempotency-Key is exact and reused across retries', async () => {
+    const randomUuid = vi.spyOn(globalThis.crypto, 'randomUUID');
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(500, { code: 'server_error' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 5, fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const promise = req({
+      method: 'POST',
+      path: '/messages/template',
+      body: { idempotency_key: 'caller-key-123' },
+      idempotent: true,
+      idempotencyKey: 'caller-key-123',
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    const sent = fetchImpl.mock.calls.map(([, init]: [string, RequestInit]) =>
+      (init.headers as Record<string, string>)['Idempotency-Key']);
+    expect(sent).toEqual(['caller-key-123', 'caller-key-123']);
+    expect(randomUuid).not.toHaveBeenCalled();
+  });
+
   it('No Idempotency-Key header when idempotent not set', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, { ok: true }));
     const req = createRequester({ ...baseOpts, retries: 5, fetchImpl: fetchImpl as unknown as typeof fetch });
@@ -145,6 +170,21 @@ describe('createRequester', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2);
     await promise;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('Retry-After sleep is capped at 30000ms', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(429, { code: 'rate_limited' }, { 'retry-after': '3600' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const promise = req({ method: 'GET', path: '/x' });
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await promise;
+
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
@@ -185,6 +225,18 @@ describe('createRequester', () => {
     expect(err.retryAfterSec).toBe(7);
   });
 
+  it('RateLimitedError reports the uncapped server Retry-After value', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      mkResponse(429, { code: 'rate_limited', message: 'slow' }, { 'retry-after': '3600' }),
+    );
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const error = await req({ method: 'GET', path: '/x' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(RateLimitedError);
+    expect((error as RateLimitedError).retryAfterSec).toBe(3600);
+  });
+
   it('Max attempts exhausted on 500 → ServerError with upstreamCode', async () => {
     const fetchImpl = vi.fn().mockImplementation(() =>
       Promise.resolve(mkResponse(502, { code: 'send_failed', message: 'wa fail', upstream_code: 'WA_X' })));
@@ -206,6 +258,57 @@ describe('createRequester', () => {
     const err = await p as ValidationError;
     expect(err).toBeInstanceOf(ValidationError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves live 402 Arabic message, details, and raw body', async () => {
+    const body = {
+      success: false,
+      code: 'prepaid_cap_exceeded',
+      message: 'Prepaid messaging cap exceeded',
+      message_ar: 'تم تجاوز حد الرسائل المدفوعة مسبقاً',
+      details: { cap_sar: 100, spent_sar: 100, required_sar: 0.25 },
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(402, body, { 'x-request-id': 'req_cap' }));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const error = await req({ method: 'GET', path: '/health' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SanadApiError);
+    expect(error).not.toBeInstanceOf(ValidationError);
+    expect(error).toMatchObject({
+      code: 'prepaid_cap_exceeded',
+      status: 402,
+      requestId: 'req_cap',
+      messageAr: body.message_ar,
+      details: body.details,
+      upstreamCode: null,
+      rawBody: body,
+    });
+  });
+
+  it('preserves upstream_code on a non-5xx send_failed error', async () => {
+    const body = {
+      success: false,
+      code: 'send_failed',
+      message: 'Meta rejected the message',
+      message_ar: 'رفضت ميتا الرسالة',
+      details: { phone_number_id: '123456789' },
+      upstream_code: 'META_131047',
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(400, body));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const error = await req({ method: 'POST', path: '/messages/template', body: {} })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(error).toMatchObject({
+      code: 'send_failed',
+      messageAr: body.message_ar,
+      details: body.details,
+      upstreamCode: 'META_131047',
+      rawBody: body,
+    });
   });
 
   it('No retry on 401 → AuthError', async () => {

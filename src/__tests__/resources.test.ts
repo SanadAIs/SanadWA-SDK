@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { health } from '../resources/health.js';
 import { listTemplates } from '../resources/templates.js';
 import { sendMessage, getMessage } from '../resources/messages.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 import type { Requester, RequestOptions } from '../request.js';
 
 const mkRequester = (impl: <T>(opts: RequestOptions) => Promise<T>): Requester => impl;
@@ -17,6 +17,19 @@ describe('health resource', () => {
     const out = await health(req);
     expect(out).toEqual({ tenantId: 't_1', scope: 'send', serverTime: '2026-05-10T00:00:00Z' });
     expect(calls[0]).toMatchObject({ method: 'GET', path: '/health' });
+  });
+
+  it('coerces a numeric tenant_id from the live response to a string', async () => {
+    const req = mkRequester(async <T>() => ({
+      success: true,
+      tenant_id: 7,
+      scope: 'send',
+      server_time: '2026-05-10T00:00:00Z',
+    }) as unknown as T);
+
+    const out = await health(req);
+
+    expect(out.tenantId).toBe('7');
   });
 });
 
@@ -91,14 +104,39 @@ describe('messages.send', () => {
     expect(out.replayed).toBe(false);
   });
 
-  it('passes idempotency_key through when provided', async () => {
+  it('passes a caller idempotency key to both the header layer and legacy body field', async () => {
     const calls: RequestOptions[] = [];
     const req = mkRequester(async <T>(opts: RequestOptions) => {
       calls.push(opts);
       return { success: true, message_id: 'm', accepted_at: 'now' } as unknown as T;
     });
     await sendMessage(req, { phoneNumberId: 'p', toPhone: '+1', templateName: 't', idempotencyKey: 'custom_key' });
+    expect(calls[0]!.idempotencyKey).toBe('custom_key');
     expect((calls[0]!.body as Record<string, unknown>).idempotency_key).toBe('custom_key');
+  });
+
+  it.each([
+    { idempotencyKey: '', description: 'empty' },
+    { idempotencyKey: 'k'.repeat(121), description: 'longer than 120 characters' },
+    { idempotencyKey: '   ', description: 'whitespace-only' },
+    { idempotencyKey: 'key with space', description: 'contains a space' },
+    { idempotencyKey: 'key\tvalue', description: 'contains a tab' },
+    { idempotencyKey: 'abc\r\nX-Evil: 1', description: 'contains CR/LF' },
+    { idempotencyKey: 'key\x7F', description: 'contains DEL' },
+    { idempotencyKey: 'مفتاح', description: 'contains non-ASCII characters' },
+  ])('rejects an idempotency key that is $description', async ({ idempotencyKey }) => {
+    const req = vi.fn();
+
+    const error = await sendMessage(req as unknown as Requester, {
+      phoneNumberId: 'p',
+      toPhone: '+1',
+      templateName: 't',
+      idempotencyKey,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).code).toBe('invalid_idempotency_key');
+    expect(req).not.toHaveBeenCalled();
   });
 });
 

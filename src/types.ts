@@ -51,7 +51,10 @@ export interface SendMessageOptions {
   templateLanguage?: string;
   templateParams?: string[];
   templateComponents?: unknown[];
-  /** Optional client-supplied idempotency key. If omitted, the SDK generates a UUID v4 automatically. */
+  /**
+   * Exact `Idempotency-Key` header value: 1–120 visible ASCII characters.
+   * The body copy is retained only for backward compatibility.
+   */
   idempotencyKey?: string;
 }
 

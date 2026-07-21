@@ -11,13 +11,28 @@ import {
 
 describe('SanadApiError', () => {
   it('sets all fields and is instanceof Error + SanadApiError', () => {
-    const err = new SanadApiError({ message: 'boom', code: 'oops', status: 500, requestId: 'req_1' });
+    const details = { field: 'phone_number_id' };
+    const rawBody = { code: 'oops', details };
+    const err = new SanadApiError({
+      message: 'boom',
+      code: 'oops',
+      status: 500,
+      requestId: 'req_1',
+      messageAr: 'خطأ',
+      details,
+      upstreamCode: 'META_1',
+      rawBody,
+    });
     expect(err).toBeInstanceOf(Error);
     expect(err).toBeInstanceOf(SanadApiError);
     expect(err.message).toBe('boom');
     expect(err.code).toBe('oops');
     expect(err.status).toBe(500);
     expect(err.requestId).toBe('req_1');
+    expect(err.messageAr).toBe('خطأ');
+    expect(err.details).toBe(details);
+    expect(err.upstreamCode).toBe('META_1');
+    expect(err.rawBody).toBe(rawBody);
     expect(err.name).toBe('SanadApiError');
   });
 
@@ -30,6 +45,10 @@ describe('SanadApiError', () => {
   it('omits requestId when not provided', () => {
     const err = new SanadApiError({ message: 'm', code: 'c', status: 400 });
     expect(err.requestId).toBeUndefined();
+    expect(err.messageAr).toBeNull();
+    expect(err.details).toEqual([]);
+    expect(err.upstreamCode).toBeNull();
+    expect(err.rawBody).toEqual({});
   });
 });
 
