@@ -4,7 +4,14 @@ Official PHP 8.1+ and Laravel SDK for the SANAD WhatsApp Public API. The core cl
 
 ## Install
 
-Packagist publication is pending. Composer installation (after publication):
+Install `0.3.0` directly from the official GitHub repository:
+
+```sh
+composer config repositories.sanadwa-sdk vcs https://github.com/x0bdr/sanad-whatsapp-sdk
+composer require sanadwa/whatsapp-sdk-php:^0.3
+```
+
+After Packagist publication, only the require command is needed:
 
 ```sh
 composer require sanadwa/whatsapp-sdk-php
@@ -81,6 +88,31 @@ $sent = SanadWhatsApp::messages()->send(new SendMessageOptions(
     templateLanguage: 'en',
 ));
 ```
+
+## Free-form customer replies
+
+After the customer sends an inbound message, reply through SANAD without
+configuring a second Meta access token:
+
+```php
+<?php
+
+use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
+use Sanadwa\WhatsApp\Laravel\Facades\SanadWhatsApp;
+
+$reply = SanadWhatsApp::messages()->reply(new SendTextReplyOptions(
+    phoneNumberId: config('services.whatsapp.phone_number_id'),
+    toPhone: '+966500000000',
+    text: 'Thank you — how can we help?',
+    previewUrl: false,
+));
+```
+
+An application's `sendText()` provider method should call
+`messages()->reply()` as shown above. Do not route free-form replies directly
+to Meta and do not wrap them in a passthrough template. SANAD returns
+`409 customer_service_window_closed` when the recipient has no active
+customer-service window; send an approved template in that case.
 
 ## Webhooks
 

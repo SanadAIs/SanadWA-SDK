@@ -14,7 +14,7 @@ use Sanadwa\WhatsApp\Resources\Webhooks;
 
 final class SanadWhatsApp
 {
-    public const VERSION = '0.2.2';
+    public const VERSION = '0.3.0';
 
     private readonly Health $healthResource;
     private readonly Templates $templatesResource;

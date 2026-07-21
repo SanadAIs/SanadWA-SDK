@@ -32,9 +32,44 @@ final class TestFixtures
             $data,
             new WebhookEvent('message.sent', [
                 'messageId' => $messageId,
+                'messageType' => 'template',
                 'toPhone' => $toPhone,
                 'templateName' => $templateName,
                 'templateLanguage' => $templateLanguage,
+                'text' => null,
+                'sentAt' => $sentAt,
+                'raw' => $data,
+            ]),
+            $overrides['secret'] ?? self::DEFAULT_SECRET,
+        );
+    }
+
+    public static function createTextMessageSentFixture(array $overrides = []): array
+    {
+        $messageId = $overrides['messageId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_TEXT';
+        $toPhone = $overrides['toPhone'] ?? '+966500000000';
+        $text = $overrides['text'] ?? 'A free-form reply';
+        $sentAt = $overrides['sentAt'] ?? '2026-07-21T12:00:00.000Z';
+        $data = [
+            'message_id' => $messageId,
+            'message_type' => 'text',
+            'to_phone' => $toPhone,
+            'text' => $text,
+            'template_name' => null,
+            'template_language' => null,
+            'sent_at' => $sentAt,
+        ];
+
+        return self::buildFixture(
+            'message.sent',
+            $data,
+            new WebhookEvent('message.sent', [
+                'messageId' => $messageId,
+                'messageType' => 'text',
+                'toPhone' => $toPhone,
+                'templateName' => null,
+                'templateLanguage' => null,
+                'text' => $text,
                 'sentAt' => $sentAt,
                 'raw' => $data,
             ]),

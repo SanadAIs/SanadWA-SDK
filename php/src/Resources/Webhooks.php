@@ -99,24 +99,48 @@ final class Webhooks
             case 'message.sent':
                 $messageId = self::asId($rawData['message_id'] ?? null);
                 $toPhone = self::asString($rawData['to_phone'] ?? null);
+                $sentAt = self::asString($rawData['sent_at'] ?? null);
+                if ($messageId === null || $toPhone === null || $sentAt === null) {
+                    return null;
+                }
+
+                $declaredType = self::asString($rawData['message_type'] ?? null);
+                $inferredType = $declaredType
+                    ?? (self::asString($rawData['text'] ?? null) !== null ? 'text' : 'template');
+                if ($inferredType === 'text') {
+                    $text = self::asString($rawData['text'] ?? null);
+                    if ($text === null) {
+                        return null;
+                    }
+
+                    return new WebhookEvent('message.sent', [
+                        'messageId' => $messageId,
+                        'messageType' => 'text',
+                        'toPhone' => $toPhone,
+                        'templateName' => null,
+                        'templateLanguage' => null,
+                        'text' => $text,
+                        'sentAt' => $sentAt,
+                        'raw' => $rawData,
+                    ]);
+                }
+                if ($inferredType !== 'template') {
+                    return null;
+                }
+
                 $templateName = self::asString($rawData['template_name'] ?? null);
                 $templateLanguage = self::asString($rawData['template_language'] ?? null);
-                $sentAt = self::asString($rawData['sent_at'] ?? null);
-                if (
-                    $messageId === null
-                    || $toPhone === null
-                    || $templateName === null
-                    || $templateLanguage === null
-                    || $sentAt === null
-                ) {
+                if ($templateName === null || $templateLanguage === null) {
                     return null;
                 }
 
                 return new WebhookEvent('message.sent', [
                     'messageId' => $messageId,
+                    'messageType' => 'template',
                     'toPhone' => $toPhone,
                     'templateName' => $templateName,
                     'templateLanguage' => $templateLanguage,
+                    'text' => null,
                     'sentAt' => $sentAt,
                     'raw' => $rawData,
                 ]);

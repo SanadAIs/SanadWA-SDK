@@ -8,6 +8,7 @@ use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Sanadwa\WhatsApp\Dto\SendMessageOptions;
+use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\SanadWhatsApp;
@@ -55,7 +56,7 @@ final class MessagesSendTest extends TestCase
         self::assertSame('Bearer pk_test', $request->getHeaderLine('Authorization'));
         self::assertSame('application/json', $request->getHeaderLine('Accept'));
         self::assertSame(
-            '@sanadwa/whatsapp-sdk-php/0.2.2',
+            '@sanadwa/whatsapp-sdk-php/0.3.0',
             $request->getHeaderLine('User-Agent'),
         );
         self::assertSame('caller-key-123', $request->getHeaderLine('Idempotency-Key'));
@@ -110,6 +111,103 @@ final class MessagesSendTest extends TestCase
             '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
             $client->requests[0]->getHeaderLine('Idempotency-Key'),
         );
+    }
+
+    public function testReplyMapsFreeFormTextRequestAndResponse(): void
+    {
+        $client = new FakeHttpClient([
+            new Response(200, ['x-idempotent-replay' => 'true'], json_encode([
+                'success' => true,
+                'message_id' => 'wamid.TEXT',
+                'message_type' => 'text',
+                'accepted_at' => '2026-07-21T12:00:00.000Z',
+                'upstream' => [
+                    'messaging_product' => 'whatsapp',
+                    'contacts' => [['wa_id' => '966500000000']],
+                    'messages' => [['id' => 'wamid.TEXT']],
+                ],
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'httpClient' => $client]);
+
+        $response = $sdk->messages()->reply(new SendTextReplyOptions(
+            phoneNumberId: 'phone-number-id',
+            toPhone: '+966500000000',
+            text: 'How can we help?',
+            previewUrl: false,
+            idempotencyKey: 'reply-key-123',
+        ));
+
+        self::assertCount(1, $client->requests);
+        $request = $client->requests[0];
+        self::assertSame('POST', $request->getMethod());
+        self::assertSame(
+            'https://api.sanadwa.com/api/public/v1/messages/text',
+            (string) $request->getUri(),
+        );
+        self::assertSame('reply-key-123', $request->getHeaderLine('Idempotency-Key'));
+        self::assertSame([
+            'phone_number_id' => 'phone-number-id',
+            'to_phone' => '+966500000000',
+            'text' => 'How can we help?',
+            'preview_url' => false,
+            'idempotency_key' => 'reply-key-123',
+        ], json_decode((string) $request->getBody(), true, 512, JSON_THROW_ON_ERROR));
+        self::assertSame('wamid.TEXT', $response->messageId);
+        self::assertSame('text', $response->messageType);
+        self::assertTrue($response->replayed);
+    }
+
+    public function testReplyOmitsOptionalFieldsAndGeneratesIdempotencyKey(): void
+    {
+        $client = new FakeHttpClient([
+            new Response(200, [], json_encode([
+                'success' => true,
+                'message_id' => null,
+                'accepted_at' => '2026-07-21T12:00:00.000Z',
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'httpClient' => $client]);
+
+        $response = $sdk->messages()->reply(
+            new SendTextReplyOptions('phone-id', '+966500000000', 'Hello'),
+        );
+
+        self::assertSame([
+            'phone_number_id' => 'phone-id',
+            'to_phone' => '+966500000000',
+            'text' => 'Hello',
+        ], json_decode(
+            (string) $client->requests[0]->getBody(),
+            true,
+            512,
+            JSON_THROW_ON_ERROR,
+        ));
+        self::assertMatchesRegularExpression(
+            '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/',
+            $client->requests[0]->getHeaderLine('Idempotency-Key'),
+        );
+        self::assertNull($response->messageId);
+        self::assertFalse($response->replayed);
+    }
+
+    public function testReplyRejectsInvalidIdempotencyKey(): void
+    {
+        $client = new FakeHttpClient([]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'httpClient' => $client]);
+
+        try {
+            $sdk->messages()->reply(new SendTextReplyOptions(
+                'phone-id',
+                '+966500000000',
+                'Hello',
+                idempotencyKey: 'bad key',
+            ));
+            self::fail('Expected ValidationError.');
+        } catch (ValidationError $error) {
+            self::assertSame('invalid_idempotency_key', $error->code);
+            self::assertCount(0, $client->requests);
+        }
     }
 
     #[DataProvider('invalidIdempotencyKeyProvider')]

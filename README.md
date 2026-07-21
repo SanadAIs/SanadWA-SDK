@@ -2,10 +2,19 @@
 
 Official TypeScript SDK for the SANAD WhatsApp Public API. Zero runtime dependencies. Dual ESM/CJS. Node ≥20.
 
+PHP and Laravel adopters should use the [PHP SDK](php/README.md).
+
 ## Install
 
 ```sh
 npm install @sanadwa/whatsapp-sdk
+```
+
+Until the npm scope is published, install the versioned `0.3.0` GitHub release
+artifact directly:
+
+```sh
+npm install https://github.com/x0bdr/sanad-whatsapp-sdk/releases/download/v0.3.0/sanadwa-whatsapp-sdk-0.3.0.tgz
 ```
 
 ## Quickstart (5 minutes)

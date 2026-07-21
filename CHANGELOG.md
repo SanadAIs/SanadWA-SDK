@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — Unreleased
+## 0.3.0 — 2026-07-21
 
 Added:
 
@@ -9,6 +9,7 @@ Added:
   template sends.
 - `message.sent` webhook narrowing now supports both template sends and text
   replies through the `messageType` discriminator.
+- Message lookup exposes `templateName: null` for free-form text replies.
 
 ## 0.2.2 — 2026-07-21
 

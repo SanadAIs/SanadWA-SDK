@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Add `messages()->reply()` for free-form customer-service replies through
+  `POST /messages/text`.
+- Add `SendTextReplyOptions` and `SendTextReplyResponse` DTOs.
+- Support template and text variants of `message.sent` webhooks through the
+  `messageType` discriminator.
+- Allow `Message::$templateName` to be `null` for free-form replies.
+- Set the SDK user agent to `@sanadwa/whatsapp-sdk-php/0.3.0`.
+
 ## 0.2.2
 
 - Harden response hydration and JSON error handling.

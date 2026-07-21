@@ -1,6 +1,8 @@
 node_modules/
+vendor/
 dist/
 coverage/
+composer.lock
 *.log
 .DS_Store
 .env*

@@ -26,7 +26,7 @@ interface MessageWire {
     provider_msg_id: string | null;
     status: string;
     sent_at: string;
-    template_name: string;
+    template_name: string | null;
     to_phone: string;
     channel: string;
     provider: string;

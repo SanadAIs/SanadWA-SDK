@@ -8,6 +8,8 @@ use Psr\Http\Message\ResponseInterface;
 use Sanadwa\WhatsApp\Dto\Message;
 use Sanadwa\WhatsApp\Dto\SendMessageOptions;
 use Sanadwa\WhatsApp\Dto\SendMessageResponse;
+use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
+use Sanadwa\WhatsApp\Dto\SendTextReplyResponse;
 use Sanadwa\WhatsApp\Dto\Upstream;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\Http\Requester;
@@ -21,8 +23,6 @@ final class Messages
 
     public function send(SendMessageOptions $options): SendMessageResponse
     {
-        $this->validateIdempotencyKey($options->idempotencyKey);
-
         $body = [
             'phone_number_id' => $options->phoneNumberId,
             'to_phone' => $options->toPhone,
@@ -37,20 +37,52 @@ final class Messages
         if ($options->templateComponents !== null) {
             $body['template_components'] = $options->templateComponents;
         }
-        if ($options->idempotencyKey !== null) {
-            $body['idempotency_key'] = $options->idempotencyKey;
+
+        return $this->postMessage('/messages/template', $body, $options->idempotencyKey);
+    }
+
+    public function reply(SendTextReplyOptions $options): SendTextReplyResponse
+    {
+        $body = [
+            'phone_number_id' => $options->phoneNumberId,
+            'to_phone' => $options->toPhone,
+            'text' => $options->text,
+        ];
+        if ($options->previewUrl !== null) {
+            $body['preview_url'] = $options->previewUrl;
+        }
+
+        $response = $this->postMessage('/messages/text', $body, $options->idempotencyKey);
+
+        return new SendTextReplyResponse(
+            messageId: $response->messageId,
+            acceptedAt: $response->acceptedAt,
+            replayed: $response->replayed,
+            upstream: $response->upstream,
+        );
+    }
+
+    private function postMessage(
+        string $path,
+        array $body,
+        ?string $idempotencyKey,
+    ): SendMessageResponse
+    {
+        $this->validateIdempotencyKey($idempotencyKey);
+        if ($idempotencyKey !== null) {
+            $body['idempotency_key'] = $idempotencyKey;
         }
 
         $replayed = false;
         $raw = $this->requester->request(
             method: 'POST',
-            path: '/messages/template',
+            path: $path,
             body: $body,
             idempotent: true,
             onHeaders: static function (ResponseInterface $response) use (&$replayed): void {
                 $replayed = $response->getHeaderLine('x-idempotent-replay') === 'true';
             },
-            idempotencyKey: $options->idempotencyKey,
+            idempotencyKey: $idempotencyKey,
         );
         $raw = ResponseValidator::body($raw);
 
@@ -106,7 +138,7 @@ final class Messages
             ),
             status: ResponseValidator::requiredString($data, 'status', 'data.status'),
             sentAt: ResponseValidator::requiredNullableString($data, 'sent_at', 'data.sent_at'),
-            templateName: ResponseValidator::requiredString(
+            templateName: ResponseValidator::requiredNullableString(
                 $data,
                 'template_name',
                 'data.template_name',

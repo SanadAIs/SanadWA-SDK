@@ -218,6 +218,21 @@ describe('messages.get', () => {
     expect(out.lastStatus).toBe('sent');
   });
 
+  it('maps a null template name for a free-form text reply', async () => {
+    const req = mkRequester(async <T>() => ({
+      success: true,
+      data: {
+        id: 'msg_text', provider_msg_id: 'wa_text', status: 'sent', sent_at: '2026-07-21T00:00:00Z',
+        template_name: null, to_phone: '+1', channel: 'whatsapp', provider: 'meta',
+        error: null, delivered_at: null, read_at: null, failed_at: null, last_status: 'sent',
+      },
+    }) as unknown as T);
+
+    const out = await getMessage(req, 'wa_text');
+
+    expect(out.templateName).toBeNull();
+  });
+
   it('propagates NotFoundError from request layer', async () => {
     const req = mkRequester(async () => {
       throw new NotFoundError({ message: 'not found', code: 'message_not_found', status: 404 });

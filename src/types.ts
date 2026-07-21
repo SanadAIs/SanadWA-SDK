@@ -90,7 +90,8 @@ export interface Message {
   providerMsgId: string | null;
   status: string;
   sentAt: string;
-  templateName: string;
+  /** Null for free-form text replies. */
+  templateName: string | null;
   toPhone: string;
   channel: string;
   provider: string;

@@ -64,7 +64,7 @@ final class MessagesGetTest extends TestCase
                 'provider_msg_id' => null,
                 'status' => 'accepted',
                 'sent_at' => null,
-                'template_name' => 'hello_world',
+                'template_name' => null,
                 'to_phone' => '+966500000001',
                 'channel' => 'whatsapp',
                 'provider' => 'meta',
@@ -81,6 +81,7 @@ final class MessagesGetTest extends TestCase
 
         self::assertNull($message->providerMsgId);
         self::assertNull($message->sentAt);
+        self::assertNull($message->templateName);
         self::assertNull($message->error);
         self::assertNull($message->deliveredAt);
         self::assertNull($message->readAt);

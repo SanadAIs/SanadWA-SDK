@@ -11,7 +11,7 @@ final class Message
         public readonly ?string $providerMsgId,
         public readonly string $status,
         public readonly ?string $sentAt,
-        public readonly string $templateName,
+        public readonly ?string $templateName,
         public readonly string $toPhone,
         public readonly string $channel,
         public readonly string $provider,

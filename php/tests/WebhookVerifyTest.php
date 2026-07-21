@@ -29,6 +29,7 @@ final class WebhookVerifyTest extends TestCase
     public static function fixtureProvider(): iterable
     {
         yield 'message sent' => [TestFixtures::createMessageSentFixture()];
+        yield 'text message sent' => [TestFixtures::createTextMessageSentFixture()];
         yield 'message delivered' => [TestFixtures::createMessageDeliveredFixture()];
         yield 'message read' => [TestFixtures::createMessageReadFixture()];
         yield 'message failed' => [TestFixtures::createMessageFailedFixture()];
