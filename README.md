@@ -339,7 +339,9 @@ for (const e of imported.errors) {
   keeps running on the server. The SDK's retries with the same key are then answered
   `409 idempotency_in_progress`, and the call ends with `RateLimitedError`. Call `import()` again
   later with the same key, file and `tags`: once the first run is finished you get its result,
-  and nothing is imported twice.
+  and nothing is imported twice. If the process that held the key died, its reservation stays in
+  flight and the same key is answered `409 idempotency_in_progress` for up to 24 hours. In that
+  case a new key is safe: the import is an upsert by phone number.
 
 ```ts
 import { randomUUID } from 'node:crypto';
@@ -670,14 +672,15 @@ try {
 **`send_failed` is never retried.** The first error goes straight to your code. What to do next
 depends on its `status`:
 
-- **A 4xx other than 408 and 429** (or `upstreamCode` `130429` with any status): WhatsApp refused
+- **A 4xx other than 408, 409 and 429** (or `upstreamCode` `130429` with any status): WhatsApp refused
   the message and nothing was sent. Fix the cause, then send again.
 - **A 5xx, 408 or 429, or the API's own 409 or 503: the result is not known.** The message may
   already be on its way. **Do not send it again with a new idempotency key**: a new key removes
   the guard against a duplicate, and the customer can get the message twice. Wait for the
   `message.delivered` or `message.failed` webhook, or check the message in the SanadWA console.
-  A failed send returns no message id, so `messages.get()` cannot be used here. A repeat with the same key is safe: it is answered `409 send_failed` and
-  sends nothing.
+  A failed send returns no message id, so `messages.get()` cannot be used here. A repeat with
+  the same key is safe: it sends nothing. While the first attempt is still unresolved it is
+  answered `409 send_failed`; once the result is known it is answered `200` with the message id.
 
 The 503 can be the first answer to a send, when WhatsApp accepted the request but returned no
 message id. See
@@ -704,8 +707,9 @@ complete. Calling again with the same idempotency key returns its result once it
 **How long one call can take.** With the defaults (5 attempts of up to 30 s each, plus the
 waits) one call can take about two and a half minutes when every attempt times out. It can take
 up to about six and a half minutes when the server asks for 60-second waits with `Retry-After`,
-as it does on some 503 answers for campaigns. Lower `retries` or `timeoutMs` if that is too
-long.
+as it does on some 503 answers for campaigns. `contacts.import()` attempts get at least 300 s
+each, so with the default 5 attempts one import call can take about 25 minutes. Lower `retries`
+or `timeoutMs` if that is too long.
 
 ## Webhooks
 
