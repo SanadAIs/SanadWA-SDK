@@ -90,6 +90,29 @@ final class ResponseValidator
         self::malformed($path, 'must be a string or number');
     }
 
+    /**
+     * A missing key or JSON `null` gives null; a string or number gives its string form.
+     */
+    public static function optionalNullableStringOrNumber(
+        array $source,
+        string $key,
+        ?string $field = null,
+    ): ?string {
+        if (!array_key_exists($key, $source) || $source[$key] === null) {
+            return null;
+        }
+
+        $value = $source[$key];
+        if (is_string($value) || is_int($value)) {
+            return (string) $value;
+        }
+        if (is_float($value) && is_finite($value)) {
+            return (string) $value;
+        }
+
+        self::malformed($field ?? $key, 'must be a string, a number or null');
+    }
+
     public static function arrayValue(mixed $value, string $field): array
     {
         if (!is_array($value)) {

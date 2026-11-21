@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sanadwa\WhatsApp\Tests;
 
 use GuzzleHttp\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Sanadwa\WhatsApp\Exceptions\NotFoundError;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
@@ -89,6 +90,101 @@ final class MessagesGetTest extends TestCase
         self::assertNull($message->lastStatus);
     }
 
+    public function testGetAcceptsNullForEveryNewlyNullableField(): void
+    {
+        $client = new FakeHttpClient([
+            $this->messageResponse([
+                'id' => '98765',
+                'provider_msg_id' => 'wamid.FAKE_LOOKUP_0001',
+                'status' => null,
+                'sent_at' => null,
+                'template_name' => null,
+                'to_phone' => null,
+                'channel' => null,
+                'provider' => null,
+            ]),
+        ]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        $message = $sdk->messages()->get('wamid.FAKE_LOOKUP_0001');
+
+        self::assertSame('98765', $message->id);
+        self::assertNull($message->status);
+        self::assertNull($message->sentAt);
+        self::assertNull($message->toPhone);
+        self::assertNull($message->channel);
+        self::assertNull($message->provider);
+        self::assertNull($message->templateName);
+    }
+
+    public function testGetAcceptsMissingKeysForEveryNullableField(): void
+    {
+        $client = new FakeHttpClient([$this->messageResponse(['id' => '98765'])]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        $message = $sdk->messages()->get('wamid.FAKE_LOOKUP_0001');
+
+        self::assertSame('98765', $message->id);
+        self::assertNull($message->providerMsgId);
+        self::assertNull($message->status);
+        self::assertNull($message->sentAt);
+        self::assertNull($message->templateName);
+        self::assertNull($message->toPhone);
+        self::assertNull($message->channel);
+        self::assertNull($message->provider);
+        self::assertNull($message->error);
+        self::assertNull($message->deliveredAt);
+        self::assertNull($message->readAt);
+        self::assertNull($message->failedAt);
+        self::assertNull($message->lastStatus);
+    }
+
+    public function testGetCoercesNumericIdToString(): void
+    {
+        $client = new FakeHttpClient([
+            $this->messageResponse(['id' => 98765, 'status' => 'delivered']),
+        ]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        $message = $sdk->messages()->get('wamid.FAKE_LOOKUP_0001');
+
+        self::assertSame('98765', $message->id);
+        self::assertSame('delivered', $message->status);
+    }
+
+    public function testGetPassesAnUnknownStatusThrough(): void
+    {
+        $client = new FakeHttpClient([
+            $this->messageResponse(['id' => '98765', 'status' => 'queued']),
+        ]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        self::assertSame('queued', $sdk->messages()->get('wamid.FAKE_LOOKUP_0001')->status);
+    }
+
+    #[DataProvider('malformedIdProvider')]
+    public function testGetMissingOrMistypedIdIsMalformedResponse(array $data): void
+    {
+        $client = new FakeHttpClient([$this->messageResponse($data)]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        try {
+            $sdk->messages()->get('wamid.FAKE_LOOKUP_0001');
+            self::fail('Expected SanadApiError.');
+        } catch (SanadApiError $error) {
+            self::assertSame('malformed_response', $error->code);
+            self::assertStringContainsString('data.id', $error->getMessage());
+        }
+    }
+
+    public static function malformedIdProvider(): iterable
+    {
+        yield 'missing' => [['status' => 'sent']];
+        yield 'null' => [['id' => null, 'status' => 'sent']];
+        yield 'boolean' => [['id' => true, 'status' => 'sent']];
+        yield 'object' => [['id' => ['value' => 1], 'status' => 'sent']];
+    }
+
     public function testGetPropagatesNotFoundErrorWithCodeAndRequestId(): void
     {
         $client = new FakeHttpClient([
@@ -129,7 +225,7 @@ final class MessagesGetTest extends TestCase
         }
     }
 
-    public function testGetMistypedRequiredFieldIsMalformedResponse(): void
+    public function testGetMistypedNullableFieldIsMalformedResponse(): void
     {
         $client = new FakeHttpClient([
             $this->messageResponse([
