@@ -12,6 +12,7 @@ use Sanadwa\WhatsApp\Dto\SendTextOptions;
 use Sanadwa\WhatsApp\Dto\SendTextReplyOptions;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
+use Sanadwa\WhatsApp\Http\Requester;
 use Sanadwa\WhatsApp\SanadWhatsApp;
 use Sanadwa\WhatsApp\Tests\Support\FakeHttpClient;
 
@@ -302,5 +303,143 @@ final class MessagesSendTest extends TestCase
             self::assertSame('malformed_response', $error->code);
             self::assertStringContainsString('accepted_at', $error->getMessage());
         }
+    }
+
+    public function testMultipartRequestSendsBoundaryHeaderAndEveryPart(): void
+    {
+        $client = new FakeHttpClient([
+            new Response(200, [], json_encode(['success' => true], JSON_THROW_ON_ERROR)),
+        ]);
+        $requester = $this->requester($client);
+
+        $result = $requester->request(
+            method: 'POST',
+            path: '/contacts/import',
+            idempotent: true,
+            idempotencyKey: 'import-key-0001',
+            multipart: $this->importParts(),
+        );
+
+        self::assertSame(['success' => true], $result);
+        $request = $client->requests[0];
+        self::assertSame('POST', $request->getMethod());
+        self::assertSame('/v1/contacts/import', $request->getUri()->getPath());
+        self::assertSame('import-key-0001', $request->getHeaderLine('Idempotency-Key'));
+        self::assertSame('Bearer pk_test_fake_key', $request->getHeaderLine('Authorization'));
+        self::assertMatchesRegularExpression(
+            '~\Amultipart/form-data; boundary=([A-Za-z0-9]+)\z~',
+            $request->getHeaderLine('Content-Type'),
+        );
+        $boundary = substr(
+            $request->getHeaderLine('Content-Type'),
+            strlen('multipart/form-data; boundary='),
+        );
+        $body = (string) $request->getBody();
+        self::assertStringContainsString('--' . $boundary . "\r\n", $body);
+        self::assertStringEndsWith('--' . $boundary . "--\r\n", $body);
+        self::assertStringContainsString('name="file"; filename="contacts.csv"', $body);
+        self::assertStringContainsString('Content-Type: text/csv', $body);
+        self::assertStringContainsString("phone,first_name\n+12025550123,Test", $body);
+        self::assertStringContainsString('name="tags"', $body);
+        self::assertStringContainsString("\r\n\r\nvip,newsletter\r\n", $body);
+        self::assertStringNotContainsString('application/json', $body);
+    }
+
+    public function testMultipartBodyIsRebuiltAndCompleteOnRetry(): void
+    {
+        $client = new FakeHttpClient([
+            new Response(500, [], json_encode([
+                'success' => false,
+                'code' => 'contacts_import_failed',
+                'message' => 'Try again',
+            ], JSON_THROW_ON_ERROR)),
+            new Response(200, [], json_encode(['success' => true], JSON_THROW_ON_ERROR)),
+        ]);
+        $requester = $this->requester($client, 2);
+
+        $requester->request(
+            method: 'POST',
+            path: '/contacts/import',
+            idempotent: true,
+            multipart: $this->importParts(),
+        );
+
+        self::assertCount(2, $client->requests);
+        foreach ($client->requests as $request) {
+            $request->getBody()->rewind();
+            $body = $request->getBody()->getContents();
+            self::assertStringStartsWith(
+                'multipart/form-data; boundary=',
+                $request->getHeaderLine('Content-Type'),
+            );
+            self::assertStringContainsString("phone,first_name\n+12025550123,Test", $body);
+            self::assertStringContainsString('vip,newsletter', $body);
+        }
+        self::assertSame(
+            $client->requests[0]->getHeaderLine('Idempotency-Key'),
+            $client->requests[1]->getHeaderLine('Idempotency-Key'),
+        );
+    }
+
+    public function testBodyAndMultipartTogetherAreRejected(): void
+    {
+        $client = new FakeHttpClient([]);
+        $requester = $this->requester($client);
+
+        try {
+            $requester->request(
+                method: 'POST',
+                path: '/contacts/import',
+                body: ['contacts' => []],
+                multipart: $this->importParts(),
+            );
+            self::fail('Expected InvalidArgumentException.');
+        } catch (\InvalidArgumentException) {
+            self::assertCount(0, $client->requests);
+        }
+    }
+
+    public function testDeleteWithoutBodySendsNoContentType(): void
+    {
+        $client = new FakeHttpClient([
+            new Response(200, [], json_encode(['success' => true], JSON_THROW_ON_ERROR)),
+        ]);
+        $requester = $this->requester($client);
+
+        $requester->request(method: 'DELETE', path: '/tags/42', idempotent: true);
+
+        $request = $client->requests[0];
+        self::assertSame('DELETE', $request->getMethod());
+        self::assertFalse($request->hasHeader('Content-Type'));
+        self::assertSame('', (string) $request->getBody());
+        self::assertMatchesRegularExpression(
+            '/\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/',
+            $request->getHeaderLine('Idempotency-Key'),
+        );
+    }
+
+    private function importParts(): array
+    {
+        return [
+            [
+                'name' => 'file',
+                'contents' => "phone,first_name\n+12025550123,Test\n",
+                'filename' => 'contacts.csv',
+                'headers' => ['Content-Type' => 'text/csv'],
+            ],
+            ['name' => 'tags', 'contents' => 'vip,newsletter'],
+        ];
+    }
+
+    private function requester(FakeHttpClient $client, int $retries = 1): Requester
+    {
+        return new Requester(
+            apiKey: 'pk_test_fake_key',
+            baseUrl: 'https://api.example.test/v1',
+            retries: $retries,
+            httpClient: $client,
+            userAgent: 'test',
+            sleeper: static fn (int $milliseconds) => null,
+        );
     }
 }

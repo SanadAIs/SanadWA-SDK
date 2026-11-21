@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sanadwa\WhatsApp\Http;
 
 use Closure;
+use GuzzleHttp\Psr7\MultipartStream;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
@@ -17,12 +18,14 @@ use Sanadwa\WhatsApp\Exceptions\AuthError;
 use Sanadwa\WhatsApp\Exceptions\NotFoundError;
 use Sanadwa\WhatsApp\Exceptions\RateLimitedError;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
+use Sanadwa\WhatsApp\Exceptions\SendFailedError;
 use Sanadwa\WhatsApp\Exceptions\ServerError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 
 final class Requester
 {
     private const MAX_REDIRECTS = 5;
+    private const CURL_ERRNO_OPERATION_TIMEDOUT = 28;
 
     private readonly int $maxAttempts;
     private readonly Closure $sleeper;
@@ -44,6 +47,17 @@ final class Requester
         };
     }
 
+    /**
+     * @param array<string, scalar|null>|null $query Flat map; null values are dropped.
+     * @param mixed $body JSON-encoded when not null.
+     * @param bool $idempotent Sends `Idempotency-Key`: the caller's value, or one UUID v4 that
+     *     is reused on every retry of this call.
+     * @param Closure|null $onHeaders Called once with the final success response.
+     * @param list<array{name: string, contents: mixed, filename?: string, headers?: array<string, string>}>|null $multipart
+     *     Parts in the element format of `GuzzleHttp\Psr7\MultipartStream`. Sent as
+     *     `multipart/form-data`; the stream is rebuilt for every attempt. Cannot be combined
+     *     with `$body`.
+     */
     public function request(
         string $method,
         string $path,
@@ -52,7 +66,14 @@ final class Requester
         bool $idempotent = false,
         ?Closure $onHeaders = null,
         ?string $idempotencyKey = null,
+        ?array $multipart = null,
     ): mixed {
+        if ($body !== null && $multipart !== null) {
+            throw new \InvalidArgumentException(
+                'SanadWhatsApp: `body` and `multipart` cannot be used together.',
+            );
+        }
+
         $resolvedIdempotencyKey = $idempotent
             ? ($idempotencyKey ?? self::uuidV4())
             : null;
@@ -86,6 +107,10 @@ final class Requester
             if ($encodedBody !== null) {
                 $headers['Content-Type'] = 'application/json';
                 $requestBody = Utils::streamFor($encodedBody);
+            } elseif ($multipart !== null) {
+                $requestBody = new MultipartStream($multipart);
+                $headers['Content-Type'] = 'multipart/form-data; boundary='
+                    . $requestBody->getBoundary();
             }
             if ($resolvedIdempotencyKey !== null) {
                 $headers['Idempotency-Key'] = $resolvedIdempotencyKey;
@@ -101,9 +126,11 @@ final class Requester
                     continue;
                 }
 
+                $timedOut = self::isTimeout($exception);
+
                 throw new ServerError(
-                    message: 'Network error',
-                    code: 'network_error',
+                    message: $timedOut ? 'Request timed out' : 'Network error',
+                    code: $timedOut ? 'timeout' : 'network_error',
                     status: 0,
                     previous: $exception,
                 );
@@ -156,6 +183,8 @@ final class Requester
                 $errorBody,
                 $requestId,
                 $retryAfterSec,
+                self::nonNegativeIntHeader($response, 'x-ratelimit-limit'),
+                self::nonNegativeIntHeader($response, 'x-ratelimit-remaining'),
             );
         }
 
@@ -291,6 +320,8 @@ final class Requester
         array $body,
         ?string $requestId,
         ?int $retryAfterSec,
+        ?int $rateLimitLimit,
+        ?int $rateLimitRemaining,
     ): SanadApiError {
         $code = self::scalarString($body['code'] ?? null) ?? 'unknown_error';
         $message = self::scalarString($body['message'] ?? null)
@@ -301,7 +332,24 @@ final class Requester
             : [];
         $upstreamCode = self::scalarString($body['upstream_code'] ?? null);
 
-        if ($status === 400) {
+        // First rule: `send_failed` carries WhatsApp's own status, so the status says nothing
+        // about the API key, the route or the rate limit.
+        if ($code === 'send_failed') {
+            $metaError = $body['meta_error'] ?? null;
+
+            return new SendFailedError(
+                message: $message,
+                code: $code,
+                status: $status,
+                requestId: $requestId,
+                messageAr: $messageAr,
+                details: $details,
+                upstreamCode: $upstreamCode,
+                rawBody: $body,
+                metaError: self::isJsonObject($metaError) ? $metaError : null,
+            );
+        }
+        if ($status === 400 || $status === 422) {
             return new ValidationError(
                 message: $message,
                 code: $code,
@@ -349,6 +397,8 @@ final class Requester
                     details: $details,
                     upstreamCode: $upstreamCode,
                     rawBody: $body,
+                    limit: $rateLimitLimit,
+                    remaining: $rateLimitRemaining,
                 );
             }
 
@@ -374,6 +424,8 @@ final class Requester
                 details: $details,
                 upstreamCode: $upstreamCode,
                 rawBody: $body,
+                limit: $rateLimitLimit,
+                remaining: $rateLimitRemaining,
             );
         }
         if ($status >= 500 && $status < 600) {
@@ -399,6 +451,37 @@ final class Requester
             upstreamCode: $upstreamCode,
             rawBody: $body,
         );
+    }
+
+    /**
+     * PSR-18 has no timeout exception type. Guzzle reports the curl error number in the
+     * handler context of its `ConnectException` / `RequestException`; 28 is a timeout.
+     */
+    private static function isTimeout(ClientExceptionInterface $exception): bool
+    {
+        if (!method_exists($exception, 'getHandlerContext')) {
+            return false;
+        }
+
+        $context = $exception->getHandlerContext();
+
+        return is_array($context)
+            && ($context['errno'] ?? null) === self::CURL_ERRNO_OPERATION_TIMEDOUT;
+    }
+
+    private static function nonNegativeIntHeader(ResponseInterface $response, string $name): ?int
+    {
+        $value = trim($response->getHeaderLine($name));
+        if (preg_match('/\A\d+\z/', $value) !== 1 || strlen($value) > 18) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    private static function isJsonObject(mixed $value): bool
+    {
+        return is_array($value) && ($value === [] || !array_is_list($value));
     }
 
     private static function scalarString(mixed $value): ?string

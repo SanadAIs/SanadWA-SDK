@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace Sanadwa\WhatsApp\Tests;
 
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Sanadwa\WhatsApp\Dto\SendMessageOptions;
+use Sanadwa\WhatsApp\Exceptions\RateLimitedError;
+use Sanadwa\WhatsApp\Exceptions\SanadApiError;
+use Sanadwa\WhatsApp\Exceptions\SendFailedError;
 use Sanadwa\WhatsApp\Exceptions\ServerError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\SanadWhatsApp;
@@ -38,6 +43,7 @@ final class RetryTest extends TestCase
     {
         yield '429' => [429, 'rate_limited'];
         yield '500' => [500, 'server_error'];
+        yield '503' => [503, 'balance_check_failed'];
         yield '409 in progress' => [409, 'idempotency_in_progress'];
     }
 
@@ -126,10 +132,10 @@ final class RetryTest extends TestCase
         self::assertSame([3000], $sleeps);
     }
 
-    public function testRetryAfterSleepIsCappedAtThirtySeconds(): void
+    public function testRetryAfterBelowTheCapIsHonoured(): void
     {
         $client = new FakeHttpClient([
-            $this->errorResponse(429, 'rate_limited', ['Retry-After' => '3600']),
+            $this->errorResponse(429, 'rate_limited', ['Retry-After' => '45']),
             $this->healthResponse(),
         ]);
         $sleeps = [];
@@ -137,7 +143,242 @@ final class RetryTest extends TestCase
 
         $sdk->health();
 
-        self::assertSame([30000], $sleeps);
+        self::assertSame([45000], $sleeps);
+    }
+
+    public function testRetryAfterSleepIsCappedAtSixtySeconds(): void
+    {
+        $client = new FakeHttpClient([
+            $this->errorResponse(429, 'rate_limited', ['Retry-After' => '120']),
+            $this->errorResponse(429, 'rate_limited', ['Retry-After' => '120']),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        try {
+            $sdk->health();
+            self::fail('Expected RateLimitedError.');
+        } catch (RateLimitedError $error) {
+            self::assertSame([60000], $sleeps);
+            self::assertSame(120, $error->retryAfterSec);
+        }
+    }
+
+    public function testRetryAfterIsHonouredOnServerErrors(): void
+    {
+        $client = new FakeHttpClient([
+            $this->errorResponse(503, 'campaign_create_timeout', ['Retry-After' => '60']),
+            $this->healthResponse(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        $sdk->health();
+
+        self::assertSame([60000], $sleeps);
+    }
+
+    public function testComputedBackoffIsStillCappedAtThirtySeconds(): void
+    {
+        $responses = [];
+        for ($i = 0; $i < 9; $i++) {
+            $responses[] = $this->errorResponse(500, 'server_error');
+        }
+        $responses[] = $this->healthResponse();
+        $client = new FakeHttpClient($responses);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps, 10);
+
+        $sdk->health();
+
+        self::assertSame(
+            [250, 500, 1000, 2000, 4000, 8000, 16000, 30000, 30000],
+            $sleeps,
+        );
+    }
+
+    #[DataProvider('sendFailedStatusProvider')]
+    public function testSendFailedIsNeverRetried(int $status): void
+    {
+        $client = new FakeHttpClient([
+            $this->errorResponse($status, 'send_failed', ['Retry-After' => '1']),
+            $this->healthResponse(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps, 5);
+
+        try {
+            $sdk->health();
+            self::fail('Expected SendFailedError.');
+        } catch (SendFailedError $error) {
+            self::assertSame($status, $error->status);
+            self::assertCount(1, $client->requests);
+            self::assertSame([], $sleeps);
+        }
+    }
+
+    public static function sendFailedStatusProvider(): iterable
+    {
+        yield '500' => [500];
+        yield '503' => [503];
+        yield '429' => [429];
+        yield '409' => [409];
+    }
+
+    #[DataProvider('neverRetriedProvider')]
+    public function testNonRetryableStatusIsNotRetried(int $status, string $code): void
+    {
+        $client = new FakeHttpClient([
+            $this->errorResponse($status, $code),
+            $this->healthResponse(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps, 5);
+
+        try {
+            $sdk->health();
+            self::fail('Expected SanadApiError.');
+        } catch (SanadApiError $error) {
+            self::assertSame($code, $error->code);
+            self::assertCount(1, $client->requests);
+            self::assertSame([], $sleeps);
+        }
+    }
+
+    public static function neverRetriedProvider(): iterable
+    {
+        yield '400' => [400, 'validation_error'];
+        yield '401' => [401, 'unauthorized'];
+        yield '402' => [402, 'insufficient_credits'];
+        yield '403' => [403, 'kyc_required'];
+        yield '404' => [404, 'tag_not_found'];
+        yield '409 campaign_busy' => [409, 'campaign_busy'];
+        yield '413' => [413, 'PAYLOAD_TOO_LARGE'];
+        yield '415' => [415, 'import_file_not_csv'];
+        yield '422' => [422, 'audience_empty'];
+    }
+
+    public function testNetworkFailureIsRetriedThenSucceeds(): void
+    {
+        $client = new FakeHttpClient([
+            new FakeNetworkException(new Request('GET', 'https://example.test')),
+            $this->healthResponse(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        self::assertSame('tenant-1', $sdk->health()->tenantId);
+        self::assertCount(2, $client->requests);
+        self::assertSame([250], $sleeps);
+    }
+
+    public function testGuzzleTimeoutIsRetriedThenSucceeds(): void
+    {
+        $client = new FakeHttpClient([
+            $this->timeoutException(),
+            $this->healthResponse(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        self::assertSame('tenant-1', $sdk->health()->tenantId);
+        self::assertSame([250], $sleeps);
+    }
+
+    public function testGuzzleTimeoutExhaustsAttemptsWithTimeoutCode(): void
+    {
+        $client = new FakeHttpClient([
+            $this->timeoutException(),
+            $this->timeoutException(),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        try {
+            $sdk->health();
+            self::fail('Expected ServerError.');
+        } catch (ServerError $error) {
+            self::assertSame('timeout', $error->code);
+            self::assertSame(0, $error->status);
+            self::assertInstanceOf(ConnectException::class, $error->getPrevious());
+            self::assertCount(2, $client->requests);
+            self::assertSame([250], $sleeps);
+        }
+    }
+
+    public function testGuzzleRequestExceptionWithTimeoutErrnoIsTimeout(): void
+    {
+        $request = new Request('GET', 'https://example.test');
+        $client = new FakeHttpClient([
+            new RequestException('Operation timed out', $request, null, null, ['errno' => 28]),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps, 1);
+
+        try {
+            $sdk->health();
+            self::fail('Expected ServerError.');
+        } catch (ServerError $error) {
+            self::assertSame('timeout', $error->code);
+        }
+    }
+
+    public function testGuzzleConnectFailureWithOtherErrnoIsNetworkError(): void
+    {
+        $request = new Request('GET', 'https://example.test');
+        $client = new FakeHttpClient([
+            new ConnectException('Could not resolve host', $request, null, ['errno' => 6]),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps, 1);
+
+        try {
+            $sdk->health();
+            self::fail('Expected ServerError.');
+        } catch (ServerError $error) {
+            self::assertSame('network_error', $error->code);
+            self::assertSame(0, $error->status);
+        }
+    }
+
+    #[DataProvider('retryableWriteProvider')]
+    public function testIdempotencyKeyIsIdenticalAcrossEveryRetriedAttempt(
+        int|string $failure,
+        string $code,
+    ): void {
+        $first = is_int($failure)
+            ? $this->errorResponse($failure, $code)
+            : new FakeNetworkException(new Request('POST', 'https://example.test'));
+        $client = new FakeHttpClient([
+            $first,
+            new Response(200, [], json_encode([
+                'success' => true,
+                'message_id' => 'wamid.FAKE_RETRY_0001',
+                'accepted_at' => '2026-11-21T10:00:00.000Z',
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $sleeps = [];
+        $sdk = $this->sdk($client, $sleeps);
+
+        $sdk->messages()->send(new SendMessageOptions(
+            '123456789',
+            '+12025550123',
+            'hello_world',
+        ));
+
+        self::assertCount(2, $client->requests);
+        $key = $client->requests[0]->getHeaderLine('Idempotency-Key');
+        self::assertNotSame('', $key);
+        self::assertSame($key, $client->requests[1]->getHeaderLine('Idempotency-Key'));
+    }
+
+    public static function retryableWriteProvider(): iterable
+    {
+        yield '429' => [429, 'rate_limited'];
+        yield '409 in progress' => [409, 'idempotency_in_progress'];
+        yield '500' => [500, 'server_error'];
+        yield '503' => [503, 'server_busy'];
+        yield 'network failure' => ['network', ''];
     }
 
     public function testHttpDateRetryAfterOverridesBackoff(): void
@@ -180,6 +421,16 @@ final class RetryTest extends TestCase
             self::assertCount(3, $client->requests);
             self::assertSame([250, 500], $sleeps);
         }
+    }
+
+    private function timeoutException(): ConnectException
+    {
+        return new ConnectException(
+            'cURL error 28: Operation timed out',
+            new Request('GET', 'https://example.test'),
+            null,
+            ['errno' => 28],
+        );
     }
 
     private function sdk(FakeHttpClient $client, array &$sleeps, int $retries = 2): SanadWhatsApp

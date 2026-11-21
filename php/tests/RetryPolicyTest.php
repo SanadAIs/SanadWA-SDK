@@ -57,6 +57,38 @@ final class RetryPolicyTest extends TestCase
         yield 'attempt 20 cap' => [20, null, 30000];
         yield 'retry-after override' => [1, 5000, 5000];
         yield 'small retry-after override' => [7, 100, 100];
-        yield 'retry-after cap' => [1, 3600000, 30000];
+        yield 'retry-after below the cap' => [1, 45000, 45000];
+        yield 'retry-after at the cap' => [1, 60000, 60000];
+        yield 'retry-after cap' => [1, 3600000, 60000];
+        yield 'retry-after 120s cap' => [3, 120000, 60000];
+    }
+
+    #[DataProvider('retryableProvider')]
+    public function testIsRetryable(int $status, string $code, bool $expected): void
+    {
+        self::assertSame($expected, RetryPolicy::isRetryable($status, $code));
+    }
+
+    public static function retryableProvider(): iterable
+    {
+        yield '429 rate_limited' => [429, 'rate_limited', true];
+        yield '409 in progress' => [409, 'idempotency_in_progress', true];
+        yield '409 conflict' => [409, 'idempotency_conflict', false];
+        yield '409 campaign_busy' => [409, 'campaign_busy', false];
+        yield '500' => [500, 'server_error', true];
+        yield '503' => [503, 'balance_check_failed', true];
+        yield '599' => [599, 'unknown_error', true];
+        yield '400' => [400, 'validation_error', false];
+        yield '401' => [401, 'unauthorized', false];
+        yield '402' => [402, 'insufficient_credits', false];
+        yield '403' => [403, 'forbidden', false];
+        yield '404' => [404, 'not_found', false];
+        yield '413' => [413, 'PAYLOAD_TOO_LARGE', false];
+        yield '415' => [415, 'import_file_not_csv', false];
+        yield '422' => [422, 'audience_empty', false];
+        yield 'send_failed 429' => [429, 'send_failed', false];
+        yield 'send_failed 500' => [500, 'send_failed', false];
+        yield 'send_failed 503' => [503, 'send_failed', false];
+        yield 'send_failed 409' => [409, 'send_failed', false];
     }
 }

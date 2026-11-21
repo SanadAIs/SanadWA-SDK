@@ -11,6 +11,7 @@ use Sanadwa\WhatsApp\Exceptions\AuthError;
 use Sanadwa\WhatsApp\Exceptions\NotFoundError;
 use Sanadwa\WhatsApp\Exceptions\RateLimitedError;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
+use Sanadwa\WhatsApp\Exceptions\SendFailedError;
 use Sanadwa\WhatsApp\Exceptions\ServerError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\SanadWhatsApp;
@@ -73,8 +74,18 @@ final class ErrorMappingTest extends TestCase
         yield '404' => [404, 'not_found', NotFoundError::class];
         yield '409 in progress' => [409, 'idempotency_in_progress', RateLimitedError::class];
         yield '409 conflict' => [409, 'idempotency_conflict', ValidationError::class];
+        yield '409 tag exists' => [409, 'tag_already_exists', ValidationError::class];
+        yield '409 campaign busy' => [409, 'campaign_busy', ValidationError::class];
+        yield '409 marketing suppressed' => [409, 'MARKETING_SUPPRESSED', ValidationError::class];
+        yield '422 audience empty' => [422, 'audience_empty', ValidationError::class];
+        yield '422 audience too large' => [422, 'audience_too_large', ValidationError::class];
         yield '429' => [429, 'rate_limited', RateLimitedError::class, ['Retry-After' => '2']];
         yield '500' => [500, 'upstream_failure', ServerError::class, [], 'META_131000'];
+        yield '503' => [503, 'balance_check_failed', ServerError::class];
+        yield '402 credits' => [402, 'insufficient_credits', SanadApiError::class];
+        yield '413 payload' => [413, 'PAYLOAD_TOO_LARGE', SanadApiError::class];
+        yield '413 import' => [413, 'import_file_too_large', SanadApiError::class];
+        yield '415 import' => [415, 'import_file_not_csv', SanadApiError::class];
         yield '418 fallback' => [418, 'teapot', SanadApiError::class];
     }
 
@@ -161,25 +172,154 @@ final class ErrorMappingTest extends TestCase
         }
     }
 
-    public function testSendFailedValidationErrorPreservesUpstreamCode(): void
+    #[DataProvider('sendFailedStatusProvider')]
+    public function testSendFailedIsSendFailedErrorWhateverTheStatus(int $status): void
+    {
+        $metaError = [
+            'title' => 'Message failed to send',
+            'message' => '(#131047) Re-engagement message',
+            'code' => 131047,
+            'subcode' => 2494010,
+            'type' => 'OAuthException',
+            'fbtrace_id' => 'FAKE_TRACE_0001',
+        ];
+        $body = [
+            'success' => false,
+            'code' => 'send_failed',
+            'message' => 'WhatsApp rejected the message',
+            'message_ar' => 'رفض واتساب الرسالة',
+            'details' => ['phone_number_id' => '123456789'],
+            'upstream_code' => '131047',
+            'meta_error' => $metaError,
+        ];
+        $client = new FakeHttpClient([
+            new Response(
+                $status,
+                [
+                    'x-request-id' => 'req_send_failed',
+                    'Retry-After' => '2',
+                    'X-RateLimit-Limit' => '60',
+                    'X-RateLimit-Remaining' => '10',
+                ],
+                json_encode($body, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
+            ),
+        ]);
+        $sdk = new SanadWhatsApp([
+            'apiKey' => 'pk_test_fake_key',
+            'retries' => 1,
+            'httpClient' => $client,
+        ]);
+
+        try {
+            $sdk->health();
+            self::fail('Expected SendFailedError.');
+        } catch (SanadApiError $error) {
+            self::assertSame(SendFailedError::class, $error::class);
+            self::assertNotInstanceOf(AuthError::class, $error);
+            self::assertNotInstanceOf(NotFoundError::class, $error);
+            self::assertNotInstanceOf(ValidationError::class, $error);
+            self::assertNotInstanceOf(RateLimitedError::class, $error);
+            self::assertNotInstanceOf(ServerError::class, $error);
+            self::assertSame('send_failed', $error->code);
+            self::assertSame($status, $error->status);
+            self::assertSame($status, $error->upstreamStatus);
+            self::assertSame('131047', $error->upstreamCode);
+            self::assertSame($metaError, $error->metaError);
+            self::assertSame('req_send_failed', $error->requestId);
+            self::assertSame('رفض واتساب الرسالة', $error->messageAr);
+            self::assertSame($body['details'], $error->details);
+            self::assertSame($body, $error->rawBody);
+            self::assertSame('WhatsApp rejected the message', $error->getMessage());
+        }
+    }
+
+    public static function sendFailedStatusProvider(): iterable
+    {
+        foreach ([400, 401, 403, 404, 409, 429, 500, 503] as $status) {
+            yield (string) $status => [$status];
+        }
+    }
+
+    #[DataProvider('absentMetaErrorProvider')]
+    public function testSendFailedWithoutMetaErrorObjectHasNullMetaError(array $extra): void
+    {
+        $client = new FakeHttpClient([
+            new Response(500, [], json_encode([
+                'success' => false,
+                'code' => 'send_failed',
+                'message' => 'WhatsApp did not answer',
+            ] + $extra, JSON_THROW_ON_ERROR)),
+        ]);
+        $sdk = new SanadWhatsApp([
+            'apiKey' => 'pk_test_fake_key',
+            'retries' => 1,
+            'httpClient' => $client,
+        ]);
+
+        try {
+            $sdk->health();
+            self::fail('Expected SendFailedError.');
+        } catch (SendFailedError $error) {
+            self::assertNull($error->metaError);
+            self::assertNull($error->upstreamCode);
+            self::assertSame(500, $error->upstreamStatus);
+        }
+    }
+
+    public static function absentMetaErrorProvider(): iterable
+    {
+        yield 'absent' => [[]];
+        yield 'null' => [['meta_error' => null]];
+        yield 'string' => [['meta_error' => 'not an object']];
+        yield 'list' => [['meta_error' => ['a', 'b']]];
+    }
+
+    public function testSendFailedBillingErrorKeepsRecoveryInRawBody(): void
     {
         $body = [
             'success' => false,
             'code' => 'send_failed',
-            'message' => 'Meta rejected the message',
-            'message_ar' => 'رفضت ميتا الرسالة',
-            'details' => ['phone_number_id' => '123456789'],
-            'upstream_code' => 'META_131047',
+            'message' => 'Payment issue on the WhatsApp account',
+            'upstream_code' => '131042',
+            'meta_error' => ['code' => 131042, 'details' => 'Business eligibility payment issue'],
+            'recovery' => ['action' => 'fix_payment_method', 'url' => 'https://example.test/billing'],
         ];
         $client = new FakeHttpClient([
-            new Response(400, [], json_encode(
-                $body,
-                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE,
-            )),
+            new Response(403, [], json_encode($body, JSON_THROW_ON_ERROR)),
         ]);
         $sdk = new SanadWhatsApp([
-            'apiKey' => 'pk_test',
+            'apiKey' => 'pk_test_fake_key',
             'retries' => 1,
+            'httpClient' => $client,
+        ]);
+
+        try {
+            $sdk->health();
+            self::fail('Expected SendFailedError.');
+        } catch (SendFailedError $error) {
+            self::assertSame($body['meta_error'], $error->metaError);
+            self::assertSame($body['recovery'], $error->rawBody['recovery']);
+        }
+    }
+
+    public function testCustomerServiceWindowClosedIsValidationErrorWithDetails(): void
+    {
+        $details = [
+            'last_inbound_at' => '2026-11-19T10:00:00.000Z',
+            'window_expires_at' => '2026-11-20T10:00:00.000Z',
+            'template_required' => true,
+        ];
+        $client = new FakeHttpClient([
+            new Response(409, [], json_encode([
+                'success' => false,
+                'code' => 'customer_service_window_closed',
+                'message' => 'The 24-hour window is closed',
+                'details' => $details,
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $sdk = new SanadWhatsApp([
+            'apiKey' => 'pk_test_fake_key',
+            'retries' => 5,
             'httpClient' => $client,
         ]);
 
@@ -187,12 +327,74 @@ final class ErrorMappingTest extends TestCase
             $sdk->health();
             self::fail('Expected ValidationError.');
         } catch (ValidationError $error) {
-            self::assertSame('send_failed', $error->code);
-            self::assertSame('META_131047', $error->upstreamCode);
-            self::assertSame('رفضت ميتا الرسالة', $error->messageAr);
-            self::assertSame($body['details'], $error->details);
-            self::assertSame($body, $error->rawBody);
+            self::assertSame('customer_service_window_closed', $error->code);
+            self::assertSame(409, $error->status);
+            self::assertSame($details, $error->details);
+            self::assertCount(1, $client->requests);
         }
+    }
+
+    #[DataProvider('rateLimitHeaderProvider')]
+    public function testRateLimitedErrorExposesRateLimitHeaders(
+        int $status,
+        string $code,
+        array $headers,
+        ?int $limit,
+        ?int $remaining,
+    ): void {
+        $client = new FakeHttpClient([
+            new Response($status, $headers, json_encode([
+                'success' => false,
+                'code' => $code,
+                'message' => 'Slow down',
+            ], JSON_THROW_ON_ERROR)),
+        ]);
+        $sdk = new SanadWhatsApp([
+            'apiKey' => 'pk_test_fake_key',
+            'retries' => 1,
+            'httpClient' => $client,
+        ]);
+
+        try {
+            $sdk->health();
+            self::fail('Expected RateLimitedError.');
+        } catch (RateLimitedError $error) {
+            self::assertSame($limit, $error->limit);
+            self::assertSame($remaining, $error->remaining);
+        }
+    }
+
+    public static function rateLimitHeaderProvider(): iterable
+    {
+        yield '429 with headers' => [
+            429,
+            'rate_limited',
+            ['X-RateLimit-Limit' => '60', 'X-RateLimit-Remaining' => '0'],
+            60,
+            0,
+        ];
+        yield '409 in progress with headers' => [
+            409,
+            'idempotency_in_progress',
+            ['X-RateLimit-Limit' => '120', 'X-RateLimit-Remaining' => '57'],
+            120,
+            57,
+        ];
+        yield 'absent headers' => [429, 'rate_limited', [], null, null];
+        yield 'non-numeric headers' => [
+            429,
+            'rate_limited',
+            ['X-RateLimit-Limit' => 'many', 'X-RateLimit-Remaining' => '-1'],
+            null,
+            null,
+        ];
+        yield 'fractional header' => [
+            429,
+            'rate_limited',
+            ['X-RateLimit-Limit' => '60.5', 'X-RateLimit-Remaining' => ' 3 '],
+            null,
+            3,
+        ];
     }
 
     public function testRateLimitReportsUncappedRawRetryAfter(): void
