@@ -242,6 +242,11 @@ describe('contacts.import', () => {
   const MAX_BYTES = 5_242_880;
 
   const filePart = (opts: SentOptions): File => opts.formData!.get('file') as File;
+  const partNames = (opts: SentOptions): string[] => {
+    const names: string[] = [];
+    opts.formData!.forEach((_value, name) => names.push(name));
+    return names;
+  };
 
   it('POSTs /contacts/import as multipart with an Idempotency-Key and no JSON body', async () => {
     const { req, calls } = fakeRequester(importOk);
@@ -275,7 +280,7 @@ describe('contacts.import', () => {
     const { req, calls } = fakeRequester(importOk);
     await new ContactsResource(req).import({ file: CSV, tags: ['vip', 'riyadh'] });
     expect(calls[0]!.formData!.get('tags')).toBe('vip,riyadh');
-    expect([...calls[0]!.formData!.keys()]).toEqual(['file', 'tags']);
+    expect(partNames(calls[0]!)).toEqual(['file', 'tags']);
   });
 
   it('sends no tags part when there are none', async () => {
@@ -283,8 +288,8 @@ describe('contacts.import', () => {
     const contacts = new ContactsResource(req);
     await contacts.import({ file: CSV });
     await contacts.import({ file: CSV, tags: [] });
-    expect([...calls[0]!.formData!.keys()]).toEqual(['file']);
-    expect([...calls[1]!.formData!.keys()]).toEqual(['file']);
+    expect(partNames(calls[0]!)).toEqual(['file']);
+    expect(partNames(calls[1]!)).toEqual(['file']);
   });
 
   it('accepts a Uint8Array', async () => {

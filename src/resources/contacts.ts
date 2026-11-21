@@ -84,7 +84,8 @@ const toCsvBlob = (file: ImportContactsInput['file']): Blob => {
   if (file instanceof Blob) {
     return file.type === CSV_CONTENT_TYPE ? file : new Blob([file], { type: CSV_CONTENT_TYPE });
   }
-  return new Blob([file], { type: CSV_CONTENT_TYPE });
+  // The cast admits a view over a SharedArrayBuffer, which `Blob` copies like any other.
+  return new Blob([file as BlobPart], { type: CSV_CONTENT_TYPE });
 };
 
 export class ContactsResource {
