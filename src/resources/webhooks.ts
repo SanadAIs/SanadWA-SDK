@@ -1,10 +1,14 @@
 /**
  * Server-only HMAC webhook verifier.
  *
- * Mirrors the canonical `verifyHmac` implementation in
- * `SANAD_API/scripts/lib/webhook-verify.mjs` (Phase 47). Same algorithm
- * (HMAC SHA256, hex, timing-safe equality), same handling of malformed
- * input (always returns `{valid:false, ...}`, never throws).
+ * Algorithm: HMAC-SHA256 of the raw body with the webhook secret, hex,
+ * compared in constant time against the `X-Sanad-Signature: sha256=<hex>`
+ * header. Malformed input always returns `{ valid: false, ... }`; the
+ * verifier never throws.
+ *
+ * `valid` reports the signature only. A correctly signed delivery the SDK
+ * cannot type is still `valid: true`, with `recognized: false` and an
+ * `unknown` event.
  *
  * Node ≥20 only — relies on `node:crypto`. For browser webhook
  * verification, use SubtleCrypto manually.
@@ -15,19 +19,15 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import type {
   WebhookEvent,
   WebhookFailedError,
+  WebhookInvalidReason,
   WebhookVerifyInput,
   WebhookVerifyResult,
 } from '../types.js';
 
-interface RawEnvelope {
-  // Live wire envelope (authoritative): { event, tenant_id, data }.
-  event?: string;
-  tenant_id?: number;
-  data?: Record<string, unknown>;
-  // Legacy envelope tolerated for backward-compat: { event_type, payload }.
-  event_type?: string;
-  payload?: Record<string, unknown>;
-}
+type JsonObject = Record<string, unknown>;
+
+const asObject = (v: unknown): JsonObject | undefined =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as JsonObject) : undefined;
 
 const asString = (v: unknown): string | undefined =>
   typeof v === 'string' && v.length > 0 ? v : undefined;
@@ -40,35 +40,51 @@ const asId = (v: unknown): string | undefined => {
   return undefined;
 };
 
-// Live `data.error` is `{ code, title, message }`. Tolerate a bare string
-// (legacy) by surfacing it as `message`.
+// `data.error` carries six keys (`null` when absent). A value of the wrong
+// type maps to `null`. A bare string (legacy) is surfaced as `message`.
 const parseFailedError = (raw: unknown): WebhookFailedError => {
-  if (raw && typeof raw === 'object') {
-    const e = raw as Record<string, unknown>;
+  const e = asObject(raw);
+  if (e) {
     return {
-      code: typeof e.code === 'number' ? e.code : null,
+      code: typeof e.code === 'number' && Number.isFinite(e.code) ? e.code : null,
       title: asString(e.title) ?? null,
       message: asString(e.message) ?? null,
+      errorData: asObject(e.error_data) ?? null,
+      details: asString(e.details) ?? null,
+      errorUserMsg: asString(e.error_user_msg) ?? null,
     };
   }
-  if (typeof raw === 'string') return { code: null, title: null, message: raw };
-  return { code: null, title: null, message: null };
+  return {
+    code: null,
+    title: null,
+    message: asString(raw) ?? null,
+    errorData: null,
+    details: null,
+    errorUserMsg: null,
+  };
 };
 
-const narrowWebhookEvent = (parsed: unknown): WebhookEvent | null => {
-  if (!parsed || typeof parsed !== 'object') return null;
-  const env = parsed as RawEnvelope;
-  const t = env.event ?? env.event_type;
-  const rawData = env.data ?? env.payload;
-  if (!t || !rawData || typeof rawData !== 'object') return null;
-  const d = rawData as Record<string, unknown>;
+// On status events `message_id` is SanadWA's row id; `provider_msg_id` is the
+// WhatsApp message id (`wamid.…`).
+const statusIds = (d: JsonObject): { providerMsgId: string | null; toPhone: string | null } => ({
+  providerMsgId: asString(d.provider_msg_id) ?? null,
+  toPhone: asString(d.to_phone) ?? null,
+});
 
+const unknownEvent = (raw: JsonObject): WebhookEvent => ({ type: 'unknown', data: { raw } });
+
+/**
+ * Type a known event from its name and `data` object. Returns `null` when the
+ * name is not a known one or a required field is missing.
+ */
+const narrowKnownEvent = (t: string, d: JsonObject): WebhookEvent | null => {
   switch (t) {
     case 'message.sent': {
-      const messageId = asId(d.message_id);
+      // `message_id` is null when WhatsApp returned no id for the send.
+      const messageId = asId(d.message_id) ?? null;
       const toPhone = asString(d.to_phone);
       const sentAt = asString(d.sent_at);
-      if (!messageId || !toPhone || !sentAt) return null;
+      if (!toPhone || !sentAt) return null;
 
       const declaredType = asString(d.message_type);
       const inferredType = declaredType ?? (asString(d.text) ? 'text' : 'template');
@@ -112,19 +128,22 @@ const narrowWebhookEvent = (parsed: unknown): WebhookEvent | null => {
       const messageId = asId(d.message_id);
       const deliveredAt = asString(d.delivered_at);
       if (!messageId || !deliveredAt) return null;
-      return { type: 'message.delivered', data: { messageId, deliveredAt, raw: d } };
+      return { type: 'message.delivered', data: { messageId, ...statusIds(d), deliveredAt, raw: d } };
     }
     case 'message.read': {
       const messageId = asId(d.message_id);
       const readAt = asString(d.read_at);
       if (!messageId || !readAt) return null;
-      return { type: 'message.read', data: { messageId, readAt, raw: d } };
+      return { type: 'message.read', data: { messageId, ...statusIds(d), readAt, raw: d } };
     }
     case 'message.failed': {
       const messageId = asId(d.message_id);
       const failedAt = asString(d.failed_at);
       if (!messageId || !failedAt) return null;
-      return { type: 'message.failed', data: { messageId, failedAt, error: parseFailedError(d.error), raw: d } };
+      return {
+        type: 'message.failed',
+        data: { messageId, ...statusIds(d), failedAt, error: parseFailedError(d.error), raw: d },
+      };
     }
     case 'inbound.message': {
       const from = asString(d.from) ?? asString(d.from_phone);
@@ -154,32 +173,70 @@ const narrowWebhookEvent = (parsed: unknown): WebhookEvent | null => {
   }
 };
 
+interface NarrowedDelivery {
+  eventType: string | null;
+  event: WebhookEvent;
+}
+
+/** Type a parsed, correctly signed body. Never rejects: falls back to `unknown`. */
+const narrowDelivery = (parsed: unknown): NarrowedDelivery => {
+  const env = asObject(parsed);
+  if (!env) return { eventType: null, event: unknownEvent({}) };
+
+  // Live envelope `{ event, tenant_id, data }`; legacy `{ event_type, payload }`.
+  const eventType = asString(env.event) ?? asString(env.event_type) ?? null;
+  const data = asObject(env.data) ?? asObject(env.payload);
+  if (eventType === null || !data) return { eventType, event: unknownEvent(data ?? {}) };
+
+  // The console's "Send test event" delivery, whatever event name it uses.
+  if (data.test === true) {
+    const message = asObject(data.message);
+    const text = message ? asObject(message.text) : undefined;
+    return {
+      eventType,
+      event: {
+        type: 'test',
+        data: {
+          test: true,
+          from: asString(data.from) ?? null,
+          text: (text ? asString(text.body) : undefined) ?? null,
+          raw: data,
+        },
+      },
+    };
+  }
+
+  return { eventType, event: narrowKnownEvent(eventType, data) ?? unknownEvent(data) };
+};
+
+const invalid = (reason: WebhookInvalidReason): WebhookVerifyResult => ({
+  valid: false,
+  signatureValid: false,
+  recognized: false,
+  reason,
+});
+
 /**
- * Verify a `X-Sanad-Signature: sha256=<hex>` header against `rawBody` using
- * the shared webhook secret. Returns a discriminated result; never throws.
+ * Verify an `X-Sanad-Signature: sha256=<hex>` header against `rawBody` using
+ * the webhook secret. Returns a discriminated result; never throws.
  *
- * On success, the parsed body is narrowed to the typed `WebhookEvent` union.
- * If the signature matches but the payload shape is unrecognized, the result
- * is `{ valid: false, reason: 'unknown_event_type' }` — adopters should
- * inspect the raw body separately if they want to handle untyped events.
+ * `valid` is true exactly when the signature matches. Answer 401 only when
+ * it is false. A signed delivery the SDK cannot type comes back as
+ * `valid: true, recognized: false` with an `unknown` event (its `data` under
+ * `event.data.raw`, the whole body under `envelope`); the console's test
+ * delivery comes back as a `test` event. Answer 2xx for both.
  */
 export const verifyWebhook = (input: WebhookVerifyInput): WebhookVerifyResult => {
   try {
-    if (!input || typeof input !== 'object') return { valid: false, reason: 'invalid_input' };
+    if (!input || typeof input !== 'object') return invalid('invalid_input');
     const { rawBody, signature, secret } = input;
 
-    if (typeof secret !== 'string' || secret.length === 0) {
-      return { valid: false, reason: 'invalid_secret' };
-    }
-    if (rawBody == null) return { valid: false, reason: 'missing_body' };
-    if (typeof signature !== 'string' || signature.length === 0) {
-      return { valid: false, reason: 'malformed_signature' };
-    }
-    if (!signature.startsWith('sha256=')) {
-      return { valid: false, reason: 'malformed_signature' };
-    }
+    if (typeof secret !== 'string' || secret.length === 0) return invalid('invalid_secret');
+    if (rawBody == null) return invalid('missing_body');
+    if (typeof signature !== 'string' || signature.length === 0) return invalid('malformed_signature');
+    if (!signature.startsWith('sha256=')) return invalid('malformed_signature');
     const provided = signature.slice('sha256='.length);
-    if (provided.length === 0) return { valid: false, reason: 'empty_signature' };
+    if (provided.length === 0) return invalid('empty_signature');
 
     const bodyBuf =
       typeof rawBody === 'string'
@@ -188,26 +245,29 @@ export const verifyWebhook = (input: WebhookVerifyInput): WebhookVerifyResult =>
 
     const expected = createHmac('sha256', secret).update(bodyBuf).digest('hex');
 
-    if (provided.length !== expected.length) {
-      return { valid: false, reason: 'signature_length_mismatch' };
-    }
+    if (provided.length !== expected.length) return invalid('signature_length_mismatch');
     if (!timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'))) {
-      return { valid: false, reason: 'signature_mismatch' };
+      return invalid('signature_mismatch');
     }
 
-    // Signature OK — parse + narrow.
-    const text =
-      typeof rawBody === 'string' ? rawBody : Buffer.from(rawBody).toString('utf8');
-    let parsed: unknown;
+    // Signature OK: from here on the result is always valid.
+    let envelope: unknown = null;
+    let narrowed: NarrowedDelivery = { eventType: null, event: unknownEvent({}) };
     try {
-      parsed = JSON.parse(text);
+      envelope = JSON.parse(bodyBuf.toString('utf8'));
+      narrowed = narrowDelivery(envelope);
     } catch {
-      return { valid: false, reason: 'verification_error' };
+      // Not JSON: keep the unknown event with an empty `raw`.
     }
-    const event = narrowWebhookEvent(parsed);
-    if (!event) return { valid: false, reason: 'unknown_event_type' };
-    return { valid: true, event };
+    return {
+      valid: true,
+      signatureValid: true,
+      recognized: narrowed.event.type !== 'unknown',
+      eventType: narrowed.eventType,
+      envelope,
+      event: narrowed.event,
+    };
   } catch {
-    return { valid: false, reason: 'verification_error' };
+    return invalid('verification_error');
   }
 };

@@ -9,7 +9,7 @@
  * ```
  */
 
-import { createRequester, type Requester } from './request.js';
+import { createRequester, DEFAULT_TIMEOUT_MS, type Requester } from './request.js';
 import { health } from './resources/health.js';
 import { listTemplates } from './resources/templates.js';
 import { sendMessage, sendTextReply, getMessage } from './resources/messages.js';
@@ -28,9 +28,9 @@ import type {
   WebhookVerifyResult,
 } from './types.js';
 
-const DEFAULT_BASE_URL = 'https://api.sanadwa.com/api/public/v1';
+const DEFAULT_BASE_URL = 'https://api.sanadwa.com/v1';
 const DEFAULT_RETRIES = 5;
-const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.3.0';
+const DEFAULT_USER_AGENT = '@sanadwa/whatsapp-sdk/0.4.0';
 
 export class SanadWhatsApp {
   readonly #req: Requester;
@@ -54,6 +54,10 @@ export class SanadWhatsApp {
     if (!opts || typeof opts.apiKey !== 'string' || opts.apiKey.length === 0) {
       throw new Error('SanadWhatsApp: `apiKey` is required.');
     }
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new Error('SanadWhatsApp: `timeoutMs` must be a non-negative finite number.');
+    }
     const fetchImpl: typeof fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.#req = createRequester({
       apiKey: opts.apiKey,
@@ -61,6 +65,7 @@ export class SanadWhatsApp {
       retries: opts.retries ?? DEFAULT_RETRIES,
       fetchImpl,
       userAgent: opts.userAgent ?? DEFAULT_USER_AGENT,
+      timeoutMs,
     });
 
     this.templates = {
@@ -89,6 +94,7 @@ export {
   AuthError,
   NotFoundError,
   ServerError,
+  SendFailedError,
   isSanadApiError,
 } from './errors.js';
 
@@ -104,8 +110,12 @@ export type {
   SendTextReplyResponse,
   Message,
   MessageSentWebhookData,
+  MessageDeliveredWebhookData,
+  MessageReadWebhookData,
+  MessageFailedWebhookData,
   WebhookEvent,
   WebhookFailedError,
+  WebhookInvalidReason,
   WebhookVerifyInput,
   WebhookVerifyResult,
 } from './types.js';
@@ -115,7 +125,7 @@ export type {
   SendTextReplyResponse as SendTextResponse,
 } from './types.js';
 
-// Phase 60 OPS-V2-04 — webhook fixtures for adopter unit tests.
+// Webhook fixtures for adopter unit tests.
 // `__` prefix marks this as a TESTING surface, not the supported runtime API.
 import * as __testFixtures from './testFixtures.js';
 export { __testFixtures };

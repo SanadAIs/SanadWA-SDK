@@ -1,10 +1,14 @@
 /**
- * HTTP request layer with typed error mapping, retry+backoff, Retry-After
- * honor, and per-call idempotency UUID generation.
+ * HTTP request layer: typed error mapping, retries with backoff, `Retry-After`
+ * handling, a per-attempt timeout, and one `Idempotency-Key` per call.
  *
- * Wire-format JSON envelopes are mapped to typed errors per the SANAD Public
- * API contract — see `<interfaces>` in the plan / publicApi.js for canonical
- * codes.
+ * Error class by response (first match wins):
+ *   code `send_failed` (any status) → SendFailedError, never retried
+ *   400 → ValidationError · 401/403 → AuthError · 404 → NotFoundError
+ *   409 `idempotency_in_progress` → RateLimitedError (retried)
+ *   409 other, 422 → ValidationError · 429 → RateLimitedError (retried)
+ *   5xx → ServerError (retried) · anything else → SanadApiError
+ *   no response → ServerError `network_error` / `timeout`, status 0 (retried)
  */
 
 import {
@@ -14,7 +18,14 @@ import {
   AuthError,
   NotFoundError,
   ServerError,
+  SendFailedError,
 } from './errors.js';
+
+/** Default per-attempt timeout. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+const MAX_COMPUTED_BACKOFF_MS = 30_000;
+const MAX_RETRY_AFTER_MS = 60_000;
 
 export interface CreateRequesterOptions {
   apiKey: string;
@@ -22,6 +33,8 @@ export interface CreateRequesterOptions {
   retries: number;
   fetchImpl: typeof fetch;
   userAgent: string;
+  /** Per-attempt timeout in milliseconds (default 30000). `0` disables it. */
+  timeoutMs?: number;
 }
 
 export interface RequestOptions {
@@ -29,6 +42,11 @@ export interface RequestOptions {
   path: string;
   query?: Record<string, string | number | boolean | undefined> | undefined;
   body?: unknown;
+  /**
+   * Multipart body. Sent as-is (fetch sets the `Content-Type` with its
+   * boundary) and reused on every retry. Cannot be combined with `body`.
+   */
+  formData?: FormData;
   /** When true, send one `Idempotency-Key` header reused across retries. */
   idempotent?: boolean;
   /** Exact caller-supplied header value; a UUID is generated when omitted. */
@@ -74,15 +92,15 @@ export const parseRetryAfter = (header: string | null): number | null => {
 };
 
 /**
- * Compute backoff for a given attempt. If `retryAfterMs` is provided it
- * overrides the exponential math.
+ * Compute the wait before the next attempt.
  *
- * Schedule: 250ms × 2^(attempt-1), capped at 30000ms.
+ * With a server `Retry-After`: that value, capped at 60000ms.
+ * Without: 250ms × 2^(attempt-1), capped at 30000ms.
  */
 export const computeBackoff = (attempt: number, retryAfterMs: number | null): number => {
-  if (retryAfterMs != null) return Math.min(30_000, retryAfterMs);
+  if (retryAfterMs != null) return Math.min(MAX_RETRY_AFTER_MS, retryAfterMs);
   const exp = 250 * 2 ** (attempt - 1);
-  return Math.min(30_000, exp);
+  return Math.min(MAX_COMPUTED_BACKOFF_MS, exp);
 };
 
 const scalarString = (value: unknown): string | null =>
@@ -93,7 +111,26 @@ const errorDetails = (value: unknown): Record<string, unknown> | unknown[] =>
     ? value as Record<string, unknown> | unknown[]
     : [];
 
-const isRetryable = (status: number, code: string): boolean => {
+const plainObject = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+
+/** `X-RateLimit-*` value: a non-negative integer, else `null`. */
+const parseCountHeader = (header: string | null): number | null =>
+  header !== null && /^\d+$/.test(header) ? Number(header) : null;
+
+const isTimeoutError = (err: unknown): boolean =>
+  typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'TimeoutError';
+
+/**
+ * Whether a response is retried automatically. `send_failed` never is: after
+ * a WhatsApp 5xx/408/429 the API marks the send "uncertain" and answers a
+ * repeat with the same key 409 `send_failed`, which would hide the original
+ * WhatsApp error from the caller.
+ */
+export const isRetryable = (status: number, code: string): boolean => {
+  if (code === 'send_failed') return false;
   if (status === 429) return true;
   if (status >= 500 && status < 600) return true;
   if (status === 409 && code === 'idempotency_in_progress') return true;
@@ -105,6 +142,7 @@ const mapErrorResponse = (
   body: ErrorBody,
   requestId: string | undefined,
   retryAfterSec: number | null,
+  headers: Headers,
 ): SanadApiError => {
   const code = scalarString(body.code) ?? 'unknown_error';
   const message = scalarString(body.message) ?? `Request failed with status ${status}`;
@@ -118,7 +156,16 @@ const mapErrorResponse = (
     upstreamCode: scalarString(body.upstream_code),
     rawBody: body,
   };
+  const rateLimitArgs = () => ({
+    ...commonArgs,
+    retryAfterSec,
+    limit: parseCountHeader(headers.get('x-ratelimit-limit')),
+    remaining: parseCountHeader(headers.get('x-ratelimit-remaining')),
+  });
 
+  if (code === 'send_failed') {
+    return new SendFailedError({ ...commonArgs, metaError: plainObject(body.meta_error) });
+  }
   if (status === 400) {
     return new ValidationError(commonArgs);
   }
@@ -130,18 +177,21 @@ const mapErrorResponse = (
   }
   if (status === 409) {
     if (code === 'idempotency_in_progress') {
-      return new RateLimitedError({ ...commonArgs, retryAfterSec });
+      return new RateLimitedError(rateLimitArgs());
     }
-    // idempotency_conflict and other 409s: client-side bug, NOT retryable.
+    // Every other 409 is a state conflict the caller must resolve: not retried.
+    return new ValidationError(commonArgs);
+  }
+  if (status === 422) {
     return new ValidationError(commonArgs);
   }
   if (status === 429) {
-    return new RateLimitedError({ ...commonArgs, retryAfterSec });
+    return new RateLimitedError(rateLimitArgs());
   }
   if (status >= 500 && status < 600) {
     return new ServerError(commonArgs);
   }
-  // Fallback for unexpected statuses.
+  // 402, 413, 415 and any other status.
   return new SanadApiError(commonArgs);
 };
 
@@ -168,8 +218,13 @@ const buildUrl = (
 export const createRequester = (opts: CreateRequesterOptions): Requester => {
   const { apiKey, baseUrl, retries, fetchImpl, userAgent } = opts;
   const maxAttempts = Math.max(1, retries);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return async <T>(reqOpts: RequestOptions): Promise<T> => {
+    if (reqOpts.body !== undefined && reqOpts.formData !== undefined) {
+      throw new TypeError('Request options `body` and `formData` cannot both be set.');
+    }
+
     const idempotencyKey = reqOpts.idempotent === true
       ? (reqOpts.idempotencyKey ?? globalThis.crypto.randomUUID())
       : null;
@@ -193,20 +248,29 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       };
       if (reqOpts.body !== undefined) {
         init.body = JSON.stringify(reqOpts.body);
+      } else if (reqOpts.formData !== undefined) {
+        // No Content-Type here: fetch adds it with the multipart boundary.
+        init.body = reqOpts.formData;
       }
+      if (timeoutMs > 0) init.signal = AbortSignal.timeout(timeoutMs);
 
       let res: Response;
+      // Body of a 2xx answer. Read inside the same guard as the fetch: the
+      // attempt's timeout also covers a body that stalls mid-transfer.
+      let successText = '';
       try {
         res = await fetchImpl(url, init);
+        if (res.ok) successText = await res.text();
       } catch (err) {
-        // Network error — treat as retryable.
+        // No usable response (network failure or attempt timeout): retryable.
         if (attempt < maxAttempts) {
           await sleep(computeBackoff(attempt, null));
           continue;
         }
+        const timedOut = isTimeoutError(err);
         throw new ServerError({
-          message: 'Network error',
-          code: 'network_error',
+          message: timedOut ? 'Request timed out' : 'Network error',
+          code: timedOut ? 'timeout' : 'network_error',
           status: 0,
           cause: err,
         });
@@ -217,9 +281,8 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       if (res.ok) {
         if (reqOpts.onHeaders) reqOpts.onHeaders(res.headers);
         // 204 / empty body → return undefined cast as T.
-        const text = await res.text();
-        if (text.length === 0) return undefined as T;
-        return JSON.parse(text) as T;
+        if (successText.length === 0) return undefined as T;
+        return JSON.parse(successText) as T;
       }
 
       let bodyJson: ErrorBody = {};
@@ -244,7 +307,7 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
         continue;
       }
 
-      lastError = mapErrorResponse(res.status, bodyJson, requestId, retryAfterSec);
+      lastError = mapErrorResponse(res.status, bodyJson, requestId, retryAfterSec, res.headers);
       throw lastError;
     }
 

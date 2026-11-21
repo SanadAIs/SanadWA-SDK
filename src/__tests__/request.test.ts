@@ -3,6 +3,7 @@ import {
   createRequester,
   parseRetryAfter,
   computeBackoff,
+  isRetryable,
 } from '../request.js';
 import {
   SanadApiError,
@@ -11,6 +12,7 @@ import {
   AuthError,
   NotFoundError,
   ServerError,
+  SendFailedError,
 } from '../errors.js';
 
 // ---------- helpers ----------
@@ -28,9 +30,9 @@ const mkResponse = (
 };
 
 const baseOpts = {
-  apiKey: 'pk_test_xxx',
+  apiKey: 'pk_test_fake_key',
   baseUrl: 'https://api.test/v1',
-  userAgent: '@sanadwa/whatsapp-sdk/0.3.0',
+  userAgent: '@sanadwa/whatsapp-sdk/0.4.0',
 };
 
 // ---------- parseRetryAfter ----------
@@ -73,10 +75,42 @@ describe('computeBackoff', () => {
     expect(computeBackoff(20, null)).toBe(30_000);
   });
 
-  it('honors retryAfterMs override up to the 30000ms cap', () => {
+  it('honors retryAfterMs override up to the 60000ms cap', () => {
     expect(computeBackoff(1, 5000)).toBe(5000);
     expect(computeBackoff(7, 100)).toBe(100);
-    expect(computeBackoff(1, 3_600_000)).toBe(30_000);
+    expect(computeBackoff(1, 45_000)).toBe(45_000);
+    expect(computeBackoff(1, 60_000)).toBe(60_000);
+    expect(computeBackoff(1, 3_600_000)).toBe(60_000);
+  });
+});
+
+// ---------- isRetryable ----------
+
+describe('isRetryable', () => {
+  it('retries 429, 409 idempotency_in_progress and 5xx', () => {
+    expect(isRetryable(429, 'rate_limited')).toBe(true);
+    expect(isRetryable(409, 'idempotency_in_progress')).toBe(true);
+    expect(isRetryable(500, 'server_error')).toBe(true);
+    expect(isRetryable(503, 'balance_check_failed')).toBe(true);
+  });
+
+  it.each([400, 401, 403, 404, 409, 429, 500, 503])('never retries send_failed (%i)', (status) => {
+    expect(isRetryable(status, 'send_failed')).toBe(false);
+  });
+
+  it.each([
+    [400, 'validation_error'],
+    [401, 'unauthorized'],
+    [402, 'insufficient_credits'],
+    [403, 'api_scope_insufficient'],
+    [404, 'tag_not_found'],
+    [409, 'idempotency_conflict'],
+    [409, 'campaign_busy'],
+    [413, 'PAYLOAD_TOO_LARGE'],
+    [415, 'import_file_not_csv'],
+    [422, 'audience_empty'],
+  ] as const)('does not retry %i %s', (status, code) => {
+    expect(isRetryable(status, code)).toBe(false);
   });
 });
 
@@ -173,18 +207,49 @@ describe('createRequester', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it('Retry-After sleep is capped at 30000ms', async () => {
+  it('Retry-After: 45 sleeps 45000ms', async () => {
     const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(mkResponse(429, { code: 'rate_limited' }, { 'retry-after': '3600' }))
+      .mockResolvedValueOnce(mkResponse(429, { code: 'rate_limited' }, { 'retry-after': '45' }))
       .mockResolvedValueOnce(mkResponse(200, { ok: true }));
     const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
     const promise = req({ method: 'GET', path: '/x' });
 
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(44_999);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     await promise;
 
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('Retry-After: 120 sleeps 60000ms (cap) and retryAfterSec stays 120', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(429, { code: 'rate_limited' }, { 'retry-after': '120' }))
+      .mockResolvedValueOnce(mkResponse(429, { code: 'rate_limited' }, { 'retry-after': '120' }));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const promise = req({ method: 'GET', path: '/x' }).catch((caught: unknown) => caught);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await promise;
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(error).toBeInstanceOf(RateLimitedError);
+    expect((error as RateLimitedError).retryAfterSec).toBe(120);
+  });
+
+  it('Retry-After is honoured on a retried 5xx', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(503, { code: 'balance_check_failed' }, { 'retry-after': '60' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const promise = req({ method: 'GET', path: '/x' });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await promise;
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
@@ -237,9 +302,9 @@ describe('createRequester', () => {
     expect((error as RateLimitedError).retryAfterSec).toBe(3600);
   });
 
-  it('Max attempts exhausted on 500 → ServerError with upstreamCode', async () => {
+  it('Max attempts exhausted on 5xx → ServerError with upstreamCode', async () => {
     const fetchImpl = vi.fn().mockImplementation(() =>
-      Promise.resolve(mkResponse(502, { code: 'send_failed', message: 'wa fail', upstream_code: 'WA_X' })));
+      Promise.resolve(mkResponse(502, { code: 'bad_gateway', message: 'upstream fail', upstream_code: 'WA_X' })));
     const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
     const p = req({ method: 'POST', path: '/x', body: {} }).catch((e) => e);
     await vi.runAllTimersAsync();
@@ -263,7 +328,7 @@ describe('createRequester', () => {
   it('preserves live 402 Arabic message, details, and raw body', async () => {
     const body = {
       success: false,
-      code: 'prepaid_cap_exceeded',
+      code: 'PREPAID_CREDIT_CAP_REACHED',
       message: 'Prepaid messaging cap exceeded',
       message_ar: 'تم تجاوز حد الرسائل المدفوعة مسبقاً',
       details: { cap_sar: 100, spent_sar: 100, required_sar: 0.25 },
@@ -276,7 +341,7 @@ describe('createRequester', () => {
     expect(error).toBeInstanceOf(SanadApiError);
     expect(error).not.toBeInstanceOf(ValidationError);
     expect(error).toMatchObject({
-      code: 'prepaid_cap_exceeded',
+      code: 'PREPAID_CREDIT_CAP_REACHED',
       status: 402,
       requestId: 'req_cap',
       messageAr: body.message_ar,
@@ -301,7 +366,8 @@ describe('createRequester', () => {
     const error = await req({ method: 'POST', path: '/messages/template', body: {} })
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(ValidationError);
+    expect(error).toBeInstanceOf(SendFailedError);
+    expect(error).not.toBeInstanceOf(ValidationError);
     expect(error).toMatchObject({
       code: 'send_failed',
       messageAr: body.message_ar,
@@ -383,10 +449,10 @@ describe('createRequester', () => {
     await vi.runAllTimersAsync();
     await p;
     const headers = fetchImpl.mock.calls[0]![1].headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer pk_test_xxx');
+    expect(headers['Authorization']).toBe('Bearer pk_test_fake_key');
     expect(headers['Content-Type']).toBe('application/json');
     expect(headers['Accept']).toBe('application/json');
-    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.3.0');
+    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.4.0');
   });
 
   it('No Content-Type when no body', async () => {
@@ -427,5 +493,382 @@ describe('createRequester', () => {
     await vi.runAllTimersAsync();
     await p;
     expect(captured).toBe('true');
+  });
+});
+
+// ---------- 0.4.0: error mapping (spec 3.1) ----------
+
+const META_ERROR = {
+  title: 'Message undeliverable',
+  message: '(#131026) Message undeliverable',
+  code: 131026,
+  subcode: 2494010,
+  type: 'OAuthException',
+  fbtrace_id: 'FAKE_TRACE_0001',
+};
+
+const sendFailedBody = (extra: Record<string, unknown> = {}) => ({
+  success: false,
+  code: 'send_failed',
+  message: 'WhatsApp rejected the message',
+  message_ar: 'رفض واتساب الرسالة',
+  upstream_code: '131026',
+  meta_error: META_ERROR,
+  ...extra,
+});
+
+describe('createRequester — error mapping', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const failOnce = async (
+    status: number,
+    body: unknown,
+    headers: Record<string, string> = {},
+    retries = 5,
+  ) => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(mkResponse(status, body, headers)));
+    const req = createRequester({ ...baseOpts, retries, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'POST', path: '/messages/template', body: {}, idempotent: true })
+      .catch((caught: unknown) => caught);
+    await vi.runAllTimersAsync();
+    return { error: await p, fetchImpl };
+  };
+
+  it.each([400, 401, 403, 404, 409, 429, 500, 503])(
+    'send_failed with status %i → SendFailedError, one call, no sleep',
+    async (status) => {
+      const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(mkResponse(status, sendFailedBody())));
+      const req = createRequester({ ...baseOpts, retries: 5, fetchImpl: fetchImpl as unknown as typeof fetch });
+      const error = await req({ method: 'POST', path: '/messages/template', body: {}, idempotent: true })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SendFailedError);
+      expect(error).toBeInstanceOf(SanadApiError);
+      expect(error).not.toBeInstanceOf(AuthError);
+      expect(error).not.toBeInstanceOf(NotFoundError);
+      expect(error).not.toBeInstanceOf(RateLimitedError);
+      expect(error).not.toBeInstanceOf(ServerError);
+      expect(error).not.toBeInstanceOf(ValidationError);
+      expect(error).toMatchObject({
+        name: 'SendFailedError',
+        code: 'send_failed',
+        status,
+        upstreamStatus: status,
+        upstreamCode: '131026',
+        metaError: META_ERROR,
+      });
+      expect(Object.keys((error as SendFailedError).metaError!)).toHaveLength(6);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('send_failed without meta_error → metaError null', async () => {
+    const { error } = await failOnce(500, { code: 'send_failed', message: 'failed' });
+    expect(error).toBeInstanceOf(SendFailedError);
+    expect((error as SendFailedError).metaError).toBeNull();
+    expect((error as SendFailedError).upstreamCode).toBeNull();
+  });
+
+  it('send_failed with a non-object meta_error → metaError null', async () => {
+    const { error } = await failOnce(500, sendFailedBody({ meta_error: 'oops' }));
+    expect((error as SendFailedError).metaError).toBeNull();
+    const second = await failOnce(500, sendFailedBody({ meta_error: ['a'] }));
+    expect((second.error as SendFailedError).metaError).toBeNull();
+  });
+
+  it('send_failed keeps recovery reachable through rawBody', async () => {
+    const recovery = { action: 'add_payment_method', url: 'https://example.test/billing' };
+    const { error } = await failOnce(402, sendFailedBody({ upstream_code: '131042', recovery }));
+    expect(error).toBeInstanceOf(SendFailedError);
+    expect((error as SendFailedError).rawBody.recovery).toEqual(recovery);
+  });
+
+  it('409 customer_service_window_closed → ValidationError with details', async () => {
+    const details = {
+      last_inbound_at: '2026-11-20T09:00:00.000Z',
+      window_expires_at: '2026-11-21T09:00:00.000Z',
+      template_required: true,
+    };
+    const { error, fetchImpl } = await failOnce(409, {
+      code: 'customer_service_window_closed', message: 'closed', details,
+    });
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).details).toEqual(details);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('422 → ValidationError, not retried', async () => {
+    const { error, fetchImpl } = await failOnce(422, { code: 'audience_empty', message: 'empty' });
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).status).toBe(422);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('403 → AuthError', async () => {
+    const { error, fetchImpl } = await failOnce(403, { code: 'api_scope_insufficient', message: 'no' });
+    expect(error).toBeInstanceOf(AuthError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [402, 'insufficient_credits'],
+    [413, 'PAYLOAD_TOO_LARGE'],
+    [415, 'import_file_not_csv'],
+  ] as const)('%i %s → base SanadApiError, not retried', async (status, code) => {
+    const { error, fetchImpl } = await failOnce(status, { code, message: 'x' });
+    expect(error).toBeInstanceOf(SanadApiError);
+    expect((error as Error).constructor).toBe(SanadApiError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('5xx with another code → ServerError after retries', async () => {
+    const { error, fetchImpl } = await failOnce(503, { code: 'campaign_create_timeout', message: 'x' }, {}, 3);
+    expect(error).toBeInstanceOf(ServerError);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('503 other code retried then succeeds with the same Idempotency-Key', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(503, { code: 'balance_check_failed' }))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(mkResponse(409, { code: 'idempotency_in_progress' }, { 'retry-after': '1' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 5, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'POST', path: '/x', body: {}, idempotent: true });
+    await vi.runAllTimersAsync();
+    expect(await p).toEqual({ ok: true });
+    const keys = fetchImpl.mock.calls.map(([, init]: [string, RequestInit]) =>
+      (init.headers as Record<string, string>)['Idempotency-Key']);
+    expect(keys).toHaveLength(4);
+    expect(new Set(keys).size).toBe(1);
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+// ---------- 0.4.0: rate-limit headers ----------
+
+describe('createRequester — rate-limit headers', () => {
+  const fail = async (status: number, code: string, headers: Record<string, string>) => {
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(status, { code, message: 'slow' }, headers));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+    return req({ method: 'GET', path: '/x' }).catch((caught: unknown) => caught) as Promise<RateLimitedError>;
+  };
+
+  it('429 exposes limit and remaining', async () => {
+    const error = await fail(429, 'rate_limited', { 'x-ratelimit-limit': '60', 'x-ratelimit-remaining': '0' });
+    expect(error).toBeInstanceOf(RateLimitedError);
+    expect(error.limit).toBe(60);
+    expect(error.remaining).toBe(0);
+  });
+
+  it('409 idempotency_in_progress exposes limit and remaining', async () => {
+    const error = await fail(409, 'idempotency_in_progress', {
+      'x-ratelimit-limit': '60', 'x-ratelimit-remaining': '59', 'retry-after': '1',
+    });
+    expect(error).toBeInstanceOf(RateLimitedError);
+    expect(error.limit).toBe(60);
+    expect(error.remaining).toBe(59);
+    expect(error.retryAfterSec).toBe(1);
+  });
+
+  it('absent headers give null', async () => {
+    const error = await fail(429, 'rate_limited', {});
+    expect(error.limit).toBeNull();
+    expect(error.remaining).toBeNull();
+  });
+
+  it.each(['abc', '-1', '1.5', '', '6 0'])('non-numeric header %j gives null', async (value) => {
+    const error = await fail(429, 'rate_limited', { 'x-ratelimit-limit': value, 'x-ratelimit-remaining': value });
+    expect(error.limit).toBeNull();
+    expect(error.remaining).toBeNull();
+  });
+});
+
+// ---------- 0.4.0: timeout ----------
+
+describe('createRequester — timeout', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const timeoutError = () => new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+
+  it('passes an AbortSignal built from the default 30000ms to fetch', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await req({ method: 'GET', path: '/x' });
+    expect(spy).toHaveBeenCalledWith(30_000);
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('uses the configured timeoutMs, one fresh signal per attempt', async () => {
+    const spy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(500, { code: 'server_error' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({
+      ...baseOpts, retries: 2, timeoutMs: 1234, fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const p = req({ method: 'GET', path: '/x' });
+    await vi.runAllTimersAsync();
+    await p;
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenNthCalledWith(1, 1234);
+    const signals = fetchImpl.mock.calls.map(([, init]: [string, RequestInit]) => init.signal);
+    expect(signals[0]).not.toBe(signals[1]);
+  });
+
+  it('timeoutMs: 0 passes no signal', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, { ok: true }));
+    const req = createRequester({
+      ...baseOpts, retries: 1, timeoutMs: 0, fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await req({ method: 'GET', path: '/x' });
+    expect('signal' in (fetchImpl.mock.calls[0]![1] as RequestInit)).toBe(false);
+  });
+
+  it('a timed-out attempt is retried, then succeeds', async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(timeoutError())
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/x' });
+    await vi.runAllTimersAsync();
+    expect(await p).toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('timeouts on every attempt end as ServerError code=timeout status=0', async () => {
+    const cause = timeoutError();
+    const fetchImpl = vi.fn().mockRejectedValue(cause);
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/x' }).catch((caught: unknown) => caught);
+    await vi.runAllTimersAsync();
+    const error = await p as ServerError;
+    expect(error).toBeInstanceOf(ServerError);
+    expect(error.code).toBe('timeout');
+    expect(error.status).toBe(0);
+    expect(error.cause).toBe(cause);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe('createRequester — timeout while reading the body', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // A 200 whose body never arrives: the attempt's signal aborts the read.
+  const stalledResponse = (): Response => {
+    const res = new Response('{}', { status: 200 });
+    vi.spyOn(res, 'text').mockRejectedValue(
+      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    );
+    return res;
+  };
+
+  it('retries, reusing the Idempotency-Key, and returns the next success', async () => {
+    const onHeaders = vi.fn();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(stalledResponse())
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'POST', path: '/x', body: { a: 1 }, idempotent: true, onHeaders });
+    await vi.runAllTimersAsync();
+    await expect(p).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const key = (i: number) => ((fetchImpl.mock.calls[i]![1] as RequestInit).headers as Record<string, string>)['Idempotency-Key'];
+    expect(key(0)).toBe(key(1));
+    expect(onHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends as ServerError code timeout, status 0, after the last attempt', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(stalledResponse()));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/x' }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const err = await p;
+    expect(err).toBeInstanceOf(ServerError);
+    expect((err as ServerError).code).toBe('timeout');
+    expect((err as ServerError).status).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------- 0.4.0: multipart transport (spec 2.9) ----------
+
+describe('createRequester — formData', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const mkForm = () => {
+    const form = new FormData();
+    form.append('file', new Blob(['phone\n+12025550123\n'], { type: 'text/csv' }), 'contacts.csv');
+    form.append('tags', 'vip,new');
+    return form;
+  };
+
+  it('sends the FormData as the body without a Content-Type header', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const form = mkForm();
+    await req({ method: 'POST', path: '/contacts/import', formData: form, idempotent: true });
+    const init = fetchImpl.mock.calls[0]![1] as RequestInit;
+    expect(init.body).toBe(form);
+    const headers = init.headers as Record<string, string>;
+    expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain('content-type');
+    expect(headers['Idempotency-Key']).toBeTruthy();
+  });
+
+  it('reuses the same FormData on retry', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(mkResponse(500, { code: 'contacts_import_failed' }))
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const form = mkForm();
+    const p = req({ method: 'POST', path: '/contacts/import', formData: form, idempotent: true });
+    await vi.runAllTimersAsync();
+    await p;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).body).toBe(form);
+    expect((fetchImpl.mock.calls[1]![1] as RequestInit).body).toBe(form);
+  });
+
+  it('body + formData throws TypeError before any HTTP', async () => {
+    const fetchImpl = vi.fn();
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(req({ method: 'POST', path: '/x', body: {}, formData: mkForm() }))
+      .rejects.toBeInstanceOf(TypeError);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('DELETE without a body is sent and an empty success body returns undefined', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const req = createRequester({ ...baseOpts, retries: 1, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await req({ method: 'DELETE', path: '/tags/42', idempotent: true });
+    expect(out).toBeUndefined();
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).method).toBe('DELETE');
   });
 });
