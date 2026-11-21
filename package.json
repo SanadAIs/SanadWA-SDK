@@ -5,10 +5,10 @@
   "homepage": "https://developers.sanadwa.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/x0bdr/SanadWA-SDK.git"
+    "url": "git+https://github.com/SanadAIs/SanadWA-SDK.git"
   },
   "bugs": {
-    "url": "https://github.com/x0bdr/SanadWA-SDK/issues"
+    "url": "https://github.com/SanadAIs/SanadWA-SDK/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",

@@ -4,8 +4,8 @@
     "license": "MIT",
     "homepage": "https://developers.sanadwa.com",
     "support": {
-        "source": "https://github.com/x0bdr/SanadWA-SDK",
-        "issues": "https://github.com/x0bdr/SanadWA-SDK/issues",
+        "source": "https://github.com/SanadAIs/SanadWA-SDK",
+        "issues": "https://github.com/SanadAIs/SanadWA-SDK/issues",
         "docs": "https://developers.sanadwa.com"
     },
     "require": {
