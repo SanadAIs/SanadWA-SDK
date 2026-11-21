@@ -294,8 +294,8 @@ describe('campaigns.get', () => {
     });
   });
 
-  it('maps missing keys the same way as nulls', async () => {
-    const { req } = fakeRequester({ success: true, data: { id: '9003', name: 'Bare', status: 'draft', created_via: 'console' } });
+  it('maps missing nullable keys the same way as nulls', async () => {
+    const { req } = fakeRequester({ success: true, data: { id: '9003', name: 'Bare', status: 'draft', created_via: 'console', counts: zeroCounts } });
     expect(await new CampaignsResource(req).get('9003')).toEqual({
       id: '9003',
       name: 'Bare',
@@ -408,7 +408,7 @@ describe.each(['pause', 'resume'] as const)('campaigns.%s', (action) => {
 
 describe('campaigns — answers the SDK cannot read', () => {
   it('passes an unknown created_via through', async () => {
-    const { req } = fakeRequester({ success: true, data: { id: '9004', name: 'X', status: 'draft', created_via: 'import' } });
+    const { req } = fakeRequester({ success: true, data: { id: '9004', name: 'X', status: 'draft', created_via: 'import', counts: zeroCounts } });
     expect((await new CampaignsResource(req).get('9004')).createdVia).toBe('import');
   });
 

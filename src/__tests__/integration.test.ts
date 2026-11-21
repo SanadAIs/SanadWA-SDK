@@ -87,7 +87,7 @@ describe('new resources through the real client', () => {
   it('every resource reaches its endpoint with the client key and base URL', async () => {
     const fetchImpl = vi.fn().mockImplementation((url: string) =>
       Promise.resolve(mkResponse(200, url.endsWith('/balance')
-        ? { success: true, data: { billing_type: 'prepaid' } }
+        ? { success: true, data: { billing_type: 'prepaid', free_credits_remaining: 0, unlimited: false, usage_this_month: { credits_used: 0, marketing: 0, utility: 0, authentication: 0, service: 0 } } }
         : { success: true, page: 1, limit: 50, data: [] })));
     const sdk = mkSdk(fetchImpl);
 

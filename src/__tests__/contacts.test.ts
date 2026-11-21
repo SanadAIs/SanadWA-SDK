@@ -75,7 +75,7 @@ describe('contacts.list', () => {
       data: [
         contactWire,
         { id: 502, phone: null, first_name: null, last_name: null, email: null, tags: [], created_at: null, updated_at: null },
-        { id: '503' },
+        { id: '503', tags: [] },
       ],
     });
     const out = await new ContactsResource(req).list();

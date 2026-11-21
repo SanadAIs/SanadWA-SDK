@@ -3,7 +3,13 @@ import { BalanceResource } from '../resources/balance.js';
 import { SanadApiError, ServerError } from '../errors.js';
 import type { Requester, RequestOptions } from '../request.js';
 
-const bareBalance = { success: true, data: { billing_type: 'prepaid' } };
+const minimalBalanceData = {
+  billing_type: 'prepaid',
+  free_credits_remaining: 0,
+  unlimited: false,
+  usage_this_month: { credits_used: 0, marketing: 0, utility: 0, authentication: 0, service: 0 },
+};
+const bareBalance = { success: true, data: minimalBalanceData };
 
 const fakeRequester = (response: unknown) => {
   const calls: RequestOptions[] = [];
@@ -140,13 +146,13 @@ describe('balance.get', () => {
 
 describe('balance.get — answers the SDK cannot read', () => {
   it('passes an unknown billing_type through', async () => {
-    const { req } = fakeRequester({ success: true, data: { billing_type: 'trial' } });
+    const { req } = fakeRequester({ success: true, data: { ...minimalBalanceData, billing_type: 'trial' } });
     expect((await new BalanceResource(req).get()).billingType).toBe('trial');
   });
 
   it.each([
     ['no data object', { success: true }, 'data'],
-    ['no billing_type', { success: true, data: {} }, 'data.billing_type'],
+    ['no billing_type', { success: true, data: { ...minimalBalanceData, billing_type: undefined } }, 'data.billing_type'],
   ])('%s throws malformed_response', async (_name, body, field) => {
     const { req } = fakeRequester(body);
     const err = await new BalanceResource(req).get().catch((e: unknown) => e);

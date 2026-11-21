@@ -20,14 +20,14 @@ import {
   toDataRecord,
   toDeletedResource,
   toId,
+  toInteger,
   toNullableString,
-  toNumber,
   toPage,
   toRecord,
   toRecordList,
   toRecordOrNull,
+  toRequiredString,
   toStringList,
-  toText,
   writeOptions,
   type WireRecord,
 } from './resource-helpers.js';
@@ -39,38 +39,52 @@ const IMPORT_MIN_TIMEOUT_MS = 300_000;
 const IMPORT_DEFAULT_FILENAME = 'contacts.csv';
 const CSV_CONTENT_TYPE = 'text/csv';
 
-const toContact = (row: WireRecord): Contact => ({
-  id: toId(row.id),
-  phone: toNullableString(row.phone),
-  firstName: toNullableString(row.first_name),
-  lastName: toNullableString(row.last_name),
-  email: toNullableString(row.email),
-  tags: toStringList(row.tags),
-  createdAt: toNullableString(row.created_at),
-  updatedAt: toNullableString(row.updated_at),
+const toContact = (row: WireRecord, field: string): Contact => ({
+  id: toId(row.id, `${field}.id`),
+  phone: toNullableString(row.phone, `${field}.phone`),
+  firstName: toNullableString(row.first_name, `${field}.first_name`),
+  lastName: toNullableString(row.last_name, `${field}.last_name`),
+  email: toNullableString(row.email, `${field}.email`),
+  tags: toStringList(row.tags, `${field}.tags`),
+  createdAt: toNullableString(row.created_at, `${field}.created_at`),
+  updatedAt: toNullableString(row.updated_at, `${field}.updated_at`),
 });
 
-const toItemError = (value: unknown): ContactItemError | null => {
-  const error = toRecordOrNull(value);
-  return error === null ? null : { code: toText(error.code), message: toText(error.message) };
+const toItemError = (value: unknown, field: string): ContactItemError | null => {
+  const error = toRecordOrNull(value, field);
+  return error === null
+    ? null
+    : {
+      code: toRequiredString(error.code, `${field}.code`),
+      message: toRequiredString(error.message, `${field}.message`),
+    };
 };
 
-const toUpsertItem = (row: WireRecord): ContactUpsertItem => {
-  const contact = toRecordOrNull(row.contact);
+/** `status` is passed through as sent, like the PHP SDK does. */
+const toUpsertItem = (row: WireRecord, field: string): ContactUpsertItem => {
+  const contact = toRecordOrNull(row.contact, `${field}.contact`);
+  const error = toItemError(row.error, `${field}.error`);
   return {
-    index: toNumber(row.index),
-    status: toText(row.status) as ContactUpsertItem['status'],
-    contact: contact === null ? null : toContact(contact),
-    error: toItemError(row.error),
+    index: toInteger(row.index, `${field}.index`),
+    status: toRequiredString(row.status, `${field}.status`) as ContactUpsertItem['status'],
+    contact: contact === null ? null : toContact(contact, `${field}.contact`),
+    error,
   };
 };
 
-const toImportError = (row: WireRecord): ContactImportError => ({
-  row: toNumber(row.row),
-  status: toText(row.status) as ContactImportError['status'],
-  code: toText(row.code),
-  message: toText(row.message),
+const toImportError = (row: WireRecord, field: string): ContactImportError => ({
+  row: toInteger(row.row, `${field}.row`),
+  status: toRequiredString(row.status, `${field}.status`) as ContactImportError['status'],
+  code: toRequiredString(row.code, `${field}.code`),
+  message: toRequiredString(row.message, `${field}.message`),
 });
+
+/** Reads the integer counters of a `summary` object. */
+const toCounts = <K extends string>(summary: WireRecord, keys: readonly K[]): Record<K, number> => {
+  const counts = {} as Record<K, number>;
+  for (const key of keys) counts[key] = toInteger(summary[key], `data.summary.${key}`);
+  return counts;
+};
 
 /** The API rejects an item that carries any key other than these five. */
 const toContactWire = (input: ContactInput): Record<string, unknown> => {
@@ -146,15 +160,10 @@ export class ContactsResource {
       ...write,
     });
     const data = toDataRecord(raw);
-    const summary = toRecord(data.summary);
+    const summary = toRecord(data.summary, 'data.summary');
     return {
-      summary: {
-        created: toNumber(summary.created),
-        updated: toNumber(summary.updated),
-        rejected: toNumber(summary.rejected),
-        failed: toNumber(summary.failed),
-      },
-      results: toRecordList(data.results).map(toUpsertItem),
+      summary: toCounts(summary, ['created', 'updated', 'rejected', 'failed'] as const),
+      results: toRecordList(data.results, 'data.results', toUpsertItem),
     };
   };
 
@@ -237,16 +246,10 @@ export class ContactsResource {
     };
     const raw = await this.#req<unknown>(request);
     const data = toDataRecord(raw);
-    const summary = toRecord(data.summary);
+    const summary = toRecord(data.summary, 'data.summary');
     return {
-      summary: {
-        rows: toNumber(summary.rows),
-        created: toNumber(summary.created),
-        updated: toNumber(summary.updated),
-        rejected: toNumber(summary.rejected),
-        failed: toNumber(summary.failed),
-      },
-      errors: toRecordList(data.errors).map(toImportError),
+      summary: toCounts(summary, ['rows', 'created', 'updated', 'rejected', 'failed'] as const),
+      errors: toRecordList(data.errors, 'data.errors', toImportError),
     };
   };
 }

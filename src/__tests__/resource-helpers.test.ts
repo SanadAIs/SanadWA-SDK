@@ -6,11 +6,16 @@ import {
   writeOptions,
   toPage,
   toRecord,
+  toRecordOrNull,
   toId,
+  toNullableId,
   toNullableString,
+  toInteger,
   toNumber,
   toNullableNumber,
+  toBoolean,
   toStringList,
+  toOptionalStringList,
   toDeletedResource,
   toDataRecord,
   toDataList,
@@ -105,11 +110,14 @@ describe('writeOptions', () => {
 });
 
 describe('wire readers', () => {
-  it('toRecord returns objects and {} for anything else', () => {
-    expect(toRecord({ a: 1 })).toEqual({ a: 1 });
-    expect(toRecord(null)).toEqual({});
-    expect(toRecord([1])).toEqual({});
-    expect(toRecord('x')).toEqual({});
+  it('toRecord requires an object; toRecordOrNull also takes missing and null', () => {
+    expect(toRecord({ a: 1 }, 'f')).toEqual({ a: 1 });
+    expect(caught(() => toRecord(undefined, 'f'))).toMatchObject({ message: 'Malformed response: field `f` is missing.' });
+    expect(caught(() => toRecord(null, 'f'))).toMatchObject({ message: 'Malformed response: field `f` must be an object.' });
+    expect(caught(() => toRecord([1], 'f'))).toMatchObject({ code: 'malformed_response' });
+    expect(toRecordOrNull(undefined, 'f')).toBeNull();
+    expect(toRecordOrNull(null, 'f')).toBeNull();
+    expect(caught(() => toRecordOrNull('x', 'f'))).toMatchObject({ code: 'malformed_response' });
   });
 
   it('toId coerces strings and numbers', () => {
@@ -129,34 +137,50 @@ describe('wire readers', () => {
     });
   });
 
-  it('toNullableString maps missing and null to null', () => {
-    expect(toNullableString('x')).toBe('x');
-    expect(toNullableString(null)).toBeNull();
-    expect(toNullableString(undefined)).toBeNull();
-    expect(toNullableString(5)).toBeNull();
+  it('toNullableString and toNullableId map missing and null to null and refuse other types', () => {
+    expect(toNullableString('x', 'f')).toBe('x');
+    expect(toNullableString(null, 'f')).toBeNull();
+    expect(toNullableString(undefined, 'f')).toBeNull();
+    expect(caught(() => toNullableString(5, 'f')))
+      .toMatchObject({ code: 'malformed_response', message: 'Malformed response: field `f` must be a string or null.' });
+    expect(toNullableId(7, 'f')).toBe('7');
+    expect(toNullableId(undefined, 'f')).toBeNull();
+    expect(caught(() => toNullableId(true, 'f'))).toMatchObject({ code: 'malformed_response' });
   });
 
-  it('toNumber and toNullableNumber', () => {
-    expect(toNumber(3)).toBe(3);
-    expect(toNumber('3')).toBe(3);
-    expect(toNumber(undefined)).toBe(0);
-    expect(toNumber('abc')).toBe(0);
-    expect(toNullableNumber(1.5)).toBe(1.5);
-    expect(toNullableNumber(0)).toBe(0);
-    expect(toNullableNumber(null)).toBeNull();
-    expect(toNullableNumber(undefined)).toBeNull();
-    expect(toNullableNumber('')).toBeNull();
+  it('toInteger, toNumber and toNullableNumber refuse numeric strings, as the PHP SDK does', () => {
+    expect(toInteger(3, 'f')).toBe(3);
+    expect(caught(() => toInteger(1.5, 'f'))).toMatchObject({ message: 'Malformed response: field `f` must be an integer.' });
+    expect(caught(() => toInteger('3', 'f'))).toMatchObject({ code: 'malformed_response' });
+    expect(toNumber(1.5, 'f')).toBe(1.5);
+    expect(caught(() => toNumber('3', 'f'))).toMatchObject({ message: 'Malformed response: field `f` must be a number.' });
+    expect(caught(() => toNumber(undefined, 'f'))).toMatchObject({ message: 'Malformed response: field `f` is missing.' });
+    expect(toNullableNumber(0, 'f')).toBe(0);
+    expect(toNullableNumber(null, 'f')).toBeNull();
+    expect(toNullableNumber(undefined, 'f')).toBeNull();
+    expect(caught(() => toNullableNumber('', 'f'))).toMatchObject({ code: 'malformed_response' });
   });
 
-  it('toStringList keeps strings only and returns [] for a non-array', () => {
-    expect(toStringList(['a', 'b'])).toEqual(['a', 'b']);
-    expect(toStringList(['a', 1, null])).toEqual(['a']);
-    expect(toStringList(undefined)).toEqual([]);
+  it('toBoolean accepts only booleans', () => {
+    expect(toBoolean(false, 'f')).toBe(false);
+    expect(caught(() => toBoolean(1, 'f'))).toMatchObject({ message: 'Malformed response: field `f` must be a boolean.' });
   });
 
-  it('toPage takes page and limit from the response and maps each row', () => {
-    const page = toPage({ success: true, page: 2, limit: 10, data: [{ n: 1 }, { n: 2 }] }, (row) => toNumber(row.n) * 10);
-    expect(page).toEqual({ page: 2, limit: 10, data: [10, 20] });
+  it('toStringList requires an array of strings; toOptionalStringList also takes missing and null', () => {
+    expect(toStringList(['a', 'b'], 'f')).toEqual(['a', 'b']);
+    expect(caught(() => toStringList(['a', 1], 'f'))).toMatchObject({ message: 'Malformed response: field `f[1]` must be a string.' });
+    expect(caught(() => toStringList(undefined, 'f'))).toMatchObject({ message: 'Malformed response: field `f` is missing.' });
+    expect(toOptionalStringList(undefined, 'f')).toEqual([]);
+    expect(toOptionalStringList(null, 'f')).toEqual([]);
+    expect(caught(() => toOptionalStringList('a', 'f'))).toMatchObject({ code: 'malformed_response' });
+  });
+
+  it('toPage takes page and limit from the response and maps each row with its path', () => {
+    const page = toPage(
+      { success: true, page: 2, limit: 10, data: [{ n: 1 }, { n: 2 }] },
+      (row, field) => `${field}:${toInteger(row.n, `${field}.n`) * 10}`,
+    );
+    expect(page).toEqual({ page: 2, limit: 10, data: ['data[0]:10', 'data[1]:20'] });
   });
 
   it.each([
@@ -179,10 +203,10 @@ describe('wire readers', () => {
 
   it('toDataRecord and toDataList read the data envelope strictly', () => {
     expect(toDataRecord({ success: true, data: { a: 1 } })).toEqual({ a: 1 });
-    expect(toDataList({ success: true, data: [{ a: 1 }] })).toEqual([{ a: 1 }]);
+    expect(toDataList({ success: true, data: [{ a: 1 }] }, (row) => row)).toEqual([{ a: 1 }]);
     expect(caught(() => toDataRecord({ success: true }))).toMatchObject({ code: 'malformed_response' });
     expect(caught(() => toDataRecord({ data: [] }))).toMatchObject({ code: 'malformed_response' });
-    expect(caught(() => toDataList({ data: {} }))).toMatchObject({ code: 'malformed_response' });
+    expect(caught(() => toDataList({ data: {} }, (row) => row))).toMatchObject({ code: 'malformed_response' });
   });
 
   it('toRequiredString passes any string through and refuses the rest', () => {

@@ -18,69 +18,84 @@ import {
   isIdempotentReplay,
   pageQuery,
   toId,
+  toInteger,
   toNullableId,
   toNullableString,
-  toNumber,
   toDataRecord,
+  toOptionalStringList,
   toPage,
   toRecord,
   toRecordOrNull,
   toRequiredString,
-  toStringList,
-  toText,
   writeOptions,
   type WireRecord,
 } from './resource-helpers.js';
 
-
-const toTemplate = (value: unknown): CampaignTemplate | null => {
-  const template = toRecordOrNull(value);
+const toTemplate = (value: unknown, field: string): CampaignTemplate | null => {
+  const template = toRecordOrNull(value, field);
   return template === null
     ? null
-    : { name: toText(template.name), language: toNullableString(template.language) };
+    : {
+      name: toRequiredString(template.name, `${field}.name`),
+      language: toNullableString(template.language, `${field}.language`),
+    };
 };
 
 /** Only a `tags` audience carries tag names; the others are sent without the key. */
-const toAudience = (value: unknown): CampaignAudience | null => {
-  const audience = toRecordOrNull(value);
-  return audience === null ? null : { type: toText(audience.type), tags: toStringList(audience.tags) };
+const toAudience = (value: unknown, field: string): CampaignAudience | null => {
+  const audience = toRecordOrNull(value, field);
+  return audience === null
+    ? null
+    : {
+      type: toRequiredString(audience.type, `${field}.type`),
+      tags: toOptionalStringList(audience.tags, `${field}.tags`),
+    };
 };
 
 /** The list endpoint omits `clicks`. */
-const toClicks = (value: unknown): CampaignClicks | null => {
-  const clicks = toRecordOrNull(value);
-  return clicks === null ? null : { tracked: toNumber(clicks.tracked), clicked: toNumber(clicks.clicked) };
+const toClicks = (value: unknown, field: string): CampaignClicks | null => {
+  const clicks = toRecordOrNull(value, field);
+  return clicks === null
+    ? null
+    : {
+      tracked: toInteger(clicks.tracked, `${field}.tracked`),
+      clicked: toInteger(clicks.clicked, `${field}.clicked`),
+    };
 };
 
-const toCampaign = (row: WireRecord): Campaign => {
-  const counts = toRecord(row.counts);
+const toCampaign = (row: WireRecord, field: string): Campaign => {
+  const template = toTemplate(row.template, `${field}.template`);
+  const audience = toAudience(row.audience, `${field}.audience`);
+  const clicks = toClicks(row.clicks, `${field}.clicks`);
+  const counts = toRecord(row.counts, `${field}.counts`);
+  const count = (key: string): number => toInteger(counts[key], `${field}.counts.${key}`);
   return {
-    id: toId(row.id),
-    name: toText(row.name),
-    status: toText(row.status),
-    pauseReason: toNullableString(row.pause_reason),
-    phoneNumberId: toNullableId(row.phone_number_id),
-    template: toTemplate(row.template),
-    audience: toAudience(row.audience),
-    startAt: toNullableString(row.start_at),
-    createdAt: toNullableString(row.created_at),
-    updatedAt: toNullableString(row.updated_at),
-    createdVia: toRequiredString(row.created_via, 'created_via'),
+    id: toId(row.id, `${field}.id`),
+    name: toRequiredString(row.name, `${field}.name`),
+    status: toRequiredString(row.status, `${field}.status`),
+    pauseReason: toNullableString(row.pause_reason, `${field}.pause_reason`),
+    phoneNumberId: toNullableId(row.phone_number_id, `${field}.phone_number_id`),
+    template,
+    audience,
+    startAt: toNullableString(row.start_at, `${field}.start_at`),
+    createdAt: toNullableString(row.created_at, `${field}.created_at`),
+    updatedAt: toNullableString(row.updated_at, `${field}.updated_at`),
+    createdVia: toRequiredString(row.created_via, `${field}.created_via`),
     counts: {
-      total: toNumber(counts.total),
-      queued: toNumber(counts.queued),
-      sending: toNumber(counts.sending),
-      sent: toNumber(counts.sent),
-      delivered: toNumber(counts.delivered),
-      read: toNumber(counts.read),
-      failed: toNumber(counts.failed),
-      canceled: toNumber(counts.canceled),
+      total: count('total'),
+      queued: count('queued'),
+      sending: count('sending'),
+      sent: count('sent'),
+      delivered: count('delivered'),
+      read: count('read'),
+      failed: count('failed'),
+      canceled: count('canceled'),
     },
-    clicks: toClicks(row.clicks),
+    clicks,
   };
 };
 
-const toCampaignFromEnvelope = (raw: unknown): Campaign => toCampaign(toDataRecord(raw));
+const toCampaignFromEnvelope = (raw: unknown): Campaign => toCampaign(toDataRecord(raw), 'data');
 
 /** The API forbids `value` unless the source is `custom`, so an unset one is left out. */
 const toVariableWire = (variable: CampaignTemplateVariable): Record<string, unknown> => {

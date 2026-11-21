@@ -22,9 +22,12 @@ Added:
 - Every write of the new resources sends an `Idempotency-Key`; `campaigns.create()` requires one
   from the caller.
 - The resource classes and their types are exported from the package entry.
-- The new resources throw `SanadApiError` with code `malformed_response` for a 2xx answer without
-  its required parts (`data`, `page`, `limit`, a row's id, `deleted`, `billing_type`,
-  `created_via`). An unknown `billing_type` or `created_via` value is passed through as sent.
+- The new resources check every field of a 2xx answer with the same rules as the PHP SDK and throw
+  `SanadApiError` with code `malformed_response` (status `0`, not retried) when a required field is
+  missing or has the wrong type, or a nullable field has the wrong type. A missing or `null`
+  nullable field reads as `null`. Counts must be numbers (a numeric string is refused); ids may be
+  strings or numbers. An unknown `billing_type`, `created_via` or status value is passed through
+  as sent.
 - `npm run typecheck` also type-checks the test files (`tsconfig.test.json`).
 - `package.json`: `repository`, `homepage` and `bugs` links; separate type declarations for
   `import` and `require`.

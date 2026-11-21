@@ -15,16 +15,16 @@ import {
   toNullableString,
   toDataRecord,
   toPage,
-  toText,
+  toRequiredString,
   writeOptions,
   type WireRecord,
 } from './resource-helpers.js';
 
-const toTag = (row: WireRecord): Tag => ({
-  id: toId(row.id),
-  name: toText(row.name),
-  description: toNullableString(row.description),
-  createdAt: toNullableString(row.created_at),
+const toTag = (row: WireRecord, field: string): Tag => ({
+  id: toId(row.id, `${field}.id`),
+  name: toRequiredString(row.name, `${field}.name`),
+  description: toNullableString(row.description, `${field}.description`),
+  createdAt: toNullableString(row.created_at, `${field}.created_at`),
 });
 
 export class TagsResource {
@@ -61,7 +61,7 @@ export class TagsResource {
     if (input.description !== undefined) body.description = input.description;
 
     const raw = await this.#req<unknown>({ method: 'POST', path: '/tags', body, ...write });
-    return toTag(toDataRecord(raw));
+    return toTag(toDataRecord(raw), 'data');
   };
 
   /**

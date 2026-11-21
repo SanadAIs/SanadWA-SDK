@@ -553,10 +553,12 @@ and `rawBody` (the decoded error body).
 Several codes share one class. **Branch on `code`, not only on the class.**
 
 **`malformed_response`** means the API answered 2xx but the SDK could not read the answer: the
-body is not JSON (`status` is the HTTP status), or a part every answer must have is missing
-(`status` is `0`): the `data` object or array, `page`, `limit`, a row's id, `deleted`,
-`billing_type` or `created_via`. It is not retried. For a write, the action may have run. The
-API does not send such answers today.
+body is not JSON (`status` is the HTTP status), or, for the phone number, balance, tag, contact
+and campaign calls, a field is missing or has the wrong type (`status` is `0`). These calls check
+every field the same way as the PHP SDK: a required field must be present with its type, a
+nullable field may be missing or `null` (it reads as `null`), counts must be numbers, and ids may
+be strings or numbers. The message names the field, for example `data[0].counts.sent`. It is not
+retried. For a write, the action may have run. The API does not send such answers today.
 
 **`SendFailedError`** means WhatsApp refused or failed the send, or the result of the send is not
 known. See [Retries and timeouts](#retries-and-timeouts) for what to do with each status.

@@ -78,9 +78,10 @@ export const pageQuery = (
 
 // ── Wire readers ────────────────────────────────────────────────────────────
 //
-// The parts every answer must have (the `data` object or array, `page`,
-// `limit`, a row's id) are checked: a 2xx answer without them throws
-// `malformed_response`. Other fields are read leniently.
+// Every field is read with the same rule as the PHP SDK: a required field
+// that is missing or mistyped, or a nullable field that is mistyped, throws
+// `malformed_response`. A missing or null nullable field reads as `null`.
+// `field` is the path the error names, written like PHP's (`data[0].name`).
 
 /** Throws the error for a 2xx answer the SDK cannot read. */
 export const malformed = (field: string, reason: string): never => {
@@ -94,84 +95,104 @@ export const malformed = (field: string, reason: string): never => {
 const isRecord = (value: unknown): value is WireRecord =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
-const requireRecord = (value: unknown, field: string): WireRecord =>
-  isRecord(value) ? value : malformed(field, value === undefined ? 'is missing' : 'must be an object');
+const isAbsent = (value: unknown): value is null | undefined => value === undefined || value === null;
 
-const requireRecordList = (value: unknown, field: string): WireRecord[] => {
-  if (!Array.isArray(value)) return malformed(field, value === undefined ? 'is missing' : 'must be an array');
-  return value.map((row, index) => requireRecord(row, `${field}[${index}]`));
+const refuse = (value: unknown, field: string, reason: string): never =>
+  malformed(field, value === undefined ? 'is missing' : reason);
+
+/** A required object. */
+export const toRecord = (value: unknown, field: string): WireRecord =>
+  isRecord(value) ? value : refuse(value, field, 'must be an object');
+
+/** A nested object; missing or null gives `null`. */
+export const toRecordOrNull = (value: unknown, field: string): WireRecord | null =>
+  isAbsent(value) ? null : toRecord(value, field);
+
+/** A required array of objects, each mapped with its own path (`field[i]`). */
+export const toRecordList = <T>(
+  value: unknown,
+  field: string,
+  mapRow: (row: WireRecord, rowField: string) => T,
+): T[] => {
+  if (!Array.isArray(value)) return refuse(value, field, 'must be an array');
+  return value.map((row, index) => {
+    const rowField = `${field}[${index}]`;
+    return mapRow(toRecord(row, rowField), rowField);
+  });
 };
 
-const requireInteger = (value: unknown, field: string): number =>
-  typeof value === 'number' && Number.isInteger(value)
+/** A required integer. */
+export const toInteger = (value: unknown, field: string): number =>
+  typeof value === 'number' && Number.isInteger(value) ? value : refuse(value, field, 'must be an integer');
+
+/** A required finite number. Numeric strings are refused, as in PHP. */
+export const toNumber = (value: unknown, field: string): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : refuse(value, field, 'must be a number');
+
+/** A finite number; missing or null gives `null`. */
+export const toNullableNumber = (value: unknown, field: string): number | null =>
+  isAbsent(value) ? null : typeof value === 'number' && Number.isFinite(value)
     ? value
-    : malformed(field, value === undefined ? 'is missing' : 'must be an integer');
+    : malformed(field, 'must be a number or null');
 
-/** The `data` object of a `{ success, data: { ... } }` answer. */
-export const toDataRecord = (raw: unknown): WireRecord =>
-  requireRecord(requireRecord(raw, 'body').data, 'data');
-
-/** The `data` array of a `{ success, data: [ ... ] }` answer. */
-export const toDataList = (raw: unknown): WireRecord[] =>
-  requireRecordList(requireRecord(raw, 'body').data, 'data');
+export const toBoolean = (value: unknown, field: string): boolean =>
+  typeof value === 'boolean' ? value : refuse(value, field, 'must be a boolean');
 
 /** A required string that is passed through as sent. */
 export const toRequiredString = (value: unknown, field: string): string =>
-  typeof value === 'string' ? value : malformed(field, value === undefined ? 'is missing' : 'must be a string');
+  typeof value === 'string' ? value : refuse(value, field, 'must be a string');
 
-export const toRecord = (value: unknown): WireRecord =>
-  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as WireRecord) : {};
+/** A string; missing or null gives `null`. */
+export const toNullableString = (value: unknown, field: string): string | null =>
+  isAbsent(value) ? null : typeof value === 'string' ? value : malformed(field, 'must be a string or null');
 
-export const toRecordOrNull = (value: unknown): WireRecord | null =>
-  value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as WireRecord) : null;
-
-export const toRecordList = (value: unknown): WireRecord[] =>
-  Array.isArray(value) ? value.map(toRecord) : [];
+const isWireNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 /** A required id. Ids arrive as strings of digits or as numbers; the SDK exposes strings. */
 export const toId = (value: unknown, field = 'id'): string =>
-  typeof value === 'string' || typeof value === 'number'
+  typeof value === 'string' || isWireNumber(value)
     ? String(value)
-    : malformed(field, value === undefined ? 'is missing' : 'must be a string or number');
+    : refuse(value, field, 'must be a string or number');
 
-export const toNullableId = (value: unknown): string | null =>
-  typeof value === 'string' || typeof value === 'number' ? String(value) : null;
+/** An id; missing or null gives `null`. */
+export const toNullableId = (value: unknown, field: string): string | null =>
+  isAbsent(value) ? null : typeof value === 'string' || isWireNumber(value)
+    ? String(value)
+    : malformed(field, 'must be a string, a number or null');
 
-export const toText = (value: unknown): string => (typeof value === 'string' ? value : '');
-
-export const toNullableString = (value: unknown): string | null =>
-  typeof value === 'string' ? value : null;
-
-export const toNullableNumber = (value: unknown): number | null => {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
+/** A required array of strings. */
+export const toStringList = (value: unknown, field: string): string[] => {
+  if (!Array.isArray(value)) return refuse(value, field, 'must be an array of strings');
+  return value.map((item, index) =>
+    typeof item === 'string' ? item : malformed(`${field}[${index}]`, 'must be a string'));
 };
 
-export const toNumber = (value: unknown): number => toNullableNumber(value) ?? 0;
+/** Like `toStringList`, but missing or null gives `[]`. */
+export const toOptionalStringList = (value: unknown, field: string): string[] =>
+  isAbsent(value) ? [] : toStringList(value, field);
 
-export const toStringList = (value: unknown): string[] =>
-  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+const toBody = (raw: unknown): WireRecord => toRecord(raw, 'body');
+
+/** The `data` object of a `{ success, data: { ... } }` answer. */
+export const toDataRecord = (raw: unknown): WireRecord => toRecord(toBody(raw).data, 'data');
+
+/** The `data` array of a `{ success, data: [ ... ] }` answer, each row mapped with its path. */
+export const toDataList = <T>(raw: unknown, mapRow: (row: WireRecord, rowField: string) => T): T[] =>
+  toRecordList(toBody(raw).data, 'data', mapRow);
 
 /** Maps `{ page, limit, data: [...] }`; `page` and `limit` are the values the server used. */
-export const toPage = <T>(raw: unknown, mapRow: (row: WireRecord) => T): Page<T> => {
-  const body = requireRecord(raw, 'body');
-  const rows = requireRecordList(body.data, 'data');
+export const toPage = <T>(raw: unknown, mapRow: (row: WireRecord, rowField: string) => T): Page<T> => {
+  const body = toBody(raw);
+  const data = toRecordList(body.data, 'data', mapRow);
   return {
-    page: requireInteger(body.page, 'page'),
-    limit: requireInteger(body.limit, 'limit'),
-    data: rows.map(mapRow),
+    page: toInteger(body.page, 'page'),
+    limit: toInteger(body.limit, 'limit'),
+    data,
   };
 };
 
 /** Maps `{ data: { id, deleted } }`. */
 export const toDeletedResource = (raw: unknown): DeletedResource => {
   const data = toDataRecord(raw);
-  if (typeof data.deleted !== 'boolean') {
-    return malformed('data.deleted', data.deleted === undefined ? 'is missing' : 'must be a boolean');
-  }
-  return { id: toId(data.id, 'data.id'), deleted: data.deleted };
+  return { id: toId(data.id, 'data.id'), deleted: toBoolean(data.deleted, 'data.deleted') };
 };
