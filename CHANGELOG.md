@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.4.0 — 2026-11-21
+
+Added:
+
+- `sdk.phoneNumbers.list()`, `sdk.balance.get()`, `sdk.tags.list/create/delete()`,
+  `sdk.contacts.list/upsert/delete/import()`, `sdk.campaigns.create/list/get/pause/resume()`.
+  The SDK now covers 19 of the 20 public API operations (all except the OpenAPI document).
+- `templates.list()` accepts `phoneNumberId` and `wabaId`; `Template.wabaId`.
+- `SendFailedError` (`upstreamStatus`, `upstreamCode`, `metaError`).
+- `RateLimitedError.limit` and `.remaining` (from `X-RateLimit-Limit` / `X-RateLimit-Remaining`).
+- `timeoutMs` client option (default 30000 ms per attempt; `0` disables it).
+- Webhooks: `signatureValid`, `recognized`, `eventType`, `envelope` on the verify result; `test` and
+  `unknown` events; `providerMsgId` and `toPhone` on delivered/read/failed events; `errorData`,
+  `details`, `errorUserMsg` on the failed-event error; fixtures `createTestEventFixture` and
+  `createUnknownEventFixture`; `recognized` and `eventType` on every fixture.
+- Every write of the new resources sends an `Idempotency-Key`; `campaigns.create()` requires one
+  from the caller.
+- The resource classes and their types are exported from the package entry.
+- `package.json`: `repository`, `homepage` and `bugs` links; separate type declarations for
+  `import` and `require`.
+
+Changed (behaviour changes — read before upgrading):
+
+- An API answer with code `send_failed` now throws `SendFailedError` whatever the HTTP status.
+  It used to throw `AuthError` (401/403), `NotFoundError` (404), `ValidationError` (400/409),
+  `RateLimitedError` (429) or `ServerError` (5xx). `SendFailedError` extends `SanadApiError` only,
+  so an `instanceof AuthError` or `instanceof ServerError` check no longer matches it.
+- `send_failed` is never retried automatically, so the original WhatsApp error reaches the caller.
+  It used to be retried on 429 and 5xx, and the retry was answered `409 send_failed`.
+- `verifyWebhook` reports a correctly signed delivery it cannot type as `valid: true,
+  recognized: false` with an `unknown` event instead of `valid: false`
+  (`reason: 'unknown_event_type'` is no longer returned). Answer 401 only when `valid` is false.
+- The console's "Send test event" delivery now verifies and is returned as a `test` event. It
+  used to be rejected.
+- `WebhookEvent` has two new members, `test` and `unknown`. An exhaustive `switch` needs both.
+- A valid verify result has four more fields. A `toEqual({ valid: true, event })` assertion on the
+  whole result fails; use `toMatchObject`.
+- Default base URL is `https://api.sanadwa.com/v1`. The old
+  `https://api.sanadwa.com/api/public/v1` still works when passed as `baseUrl`.
+- A server `Retry-After` is honoured up to 60 s (was 30 s); computed backoff is still capped at 30 s.
+- HTTP 422 now throws `ValidationError` (was the base `SanadApiError`).
+- Every attempt now has a 30 s timeout. A call that used to wait longer for an answer is now
+  retried, and ends with `ServerError` code `timeout`.
+- Types: `Template.category`, `Message.status`, `Message.sentAt`, `Message.toPhone`,
+  `Message.channel`, `Message.provider` and the `message.sent` event's `messageId` can be `null`.
+- Default user agent is `@sanadwa/whatsapp-sdk/0.4.0`.
+
+Fixed:
+
+- Requests can no longer hang forever: every attempt has a timeout.
+- `Message.id` is always a string, also when the API sends a number.
+- The webhook test suite no longer imports a file from another repository (fixed signature vectors).
+- Removed two outdated package tarballs from the repository.
+- README: the install section leads with a command that works today, and the error and retry
+  sections match the code.
+
 ## 0.3.0 — 2026-07-21
 
 Added:

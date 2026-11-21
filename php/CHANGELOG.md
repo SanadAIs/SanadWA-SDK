@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.4.0 — 2026-11-21
+
+Added:
+
+- `phoneNumbers()->list()`, `balance()->get()`, `tags()->list/create/delete()`,
+  `contacts()->list/upsert/delete/import()`, `campaigns()->create/list/get/pause/resume()`, with
+  their DTOs. The SDK now covers 19 of the 20 public API operations (all except the OpenAPI
+  document).
+- `templates()->list()` accepts `$phoneNumberId` and `$wabaId`; `Template::$wabaId`.
+- `SendFailedError` (`$upstreamStatus`, `$upstreamCode`, `$metaError`).
+- `RateLimitedError::$limit` and `::$remaining` (from `X-RateLimit-Limit` /
+  `X-RateLimit-Remaining`).
+- Webhooks: `$signatureValid`, `$recognized`, `$eventType`, `$envelope` on the verify result; `test`
+  and `unknown` events; `providerMsgId` and `toPhone` on delivered/read/failed events;
+  `WebhookFailedError::$errorData`, `::$details`, `::$errorUserMsg`; fixtures
+  `createTestEventFixture()` and `createUnknownEventFixture()`; `recognized` and `eventType` keys
+  on every fixture.
+- Laravel: `SANADWA_API_KEY` is read when `SANAD_API_KEY` is not set. The facade has the new
+  resource methods.
+- Every write of the new resources sends an `Idempotency-Key`; `campaigns()->create()` requires one
+  from the caller.
+- `composer.json`: `homepage` and `support` links.
+
+Changed (behaviour changes — read before upgrading):
+
+- An API answer with code `send_failed` now throws `SendFailedError` whatever the HTTP status
+  (was `AuthError`, `NotFoundError`, `ValidationError`, `RateLimitedError` or `ServerError`).
+  `SendFailedError` extends `SanadApiError` only, so a `catch (AuthError)` or `catch (ServerError)`
+  block no longer receives it.
+- `send_failed` is never retried automatically, so the original WhatsApp error reaches the caller.
+  It used to be retried on 429 and 5xx.
+- `Webhooks::verify()` reports a correctly signed delivery it cannot type as valid with
+  `$recognized === false` and an `unknown` event instead of invalid; the reason
+  `unknown_event_type` is no longer returned. This includes a signed body that is not JSON or is
+  nested deeper than 512 levels (was `verification_error`). Answer 401 only when `$valid` is false.
+- The console's "Send test event" delivery now verifies and is returned as a `test` event. It
+  used to be rejected.
+- Default base URL is `https://api.sanadwa.com/v1` (`Config::DEFAULT_BASE_URL`, the Laravel config
+  default). The old `https://api.sanadwa.com/api/public/v1` still works when configured
+  explicitly.
+- A server `Retry-After` is honoured up to 60 s (was 30 s); computed backoff is still capped at 30 s.
+- HTTP 422 now throws `ValidationError` (was the base `SanadApiError`).
+- A timed-out request ends with code `timeout` when the Guzzle client reports it (was
+  `network_error`).
+- `Template::$category`, `Message::$status`, `::$toPhone`, `::$channel`, `::$provider` are nullable.
+
+Fixed:
+
+- `templates()->list()` no longer throws on a template whose category is null.
+- `messages()->get()` no longer throws when status, to_phone, channel or provider is null, or when
+  the id arrives as a number.
+- Set the SDK user agent to `@sanadwa/whatsapp-sdk-php/0.4.0`.
+- README: the install section leads with a command that works today, and the error and retry
+  sections match the code.
+
 ## 0.3.0
 
 - Add `messages()->sendText()` for free-form customer-service replies through

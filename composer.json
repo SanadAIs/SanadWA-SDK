@@ -2,6 +2,12 @@
     "name": "sanadwa/whatsapp-sdk-php",
     "description": "Official PHP and Laravel SDK for the SANAD WhatsApp Public API",
     "license": "MIT",
+    "homepage": "https://developers.sanadwa.com",
+    "support": {
+        "source": "https://github.com/x0bdr/sanad-whatsapp-sdk",
+        "issues": "https://github.com/x0bdr/sanad-whatsapp-sdk/issues",
+        "docs": "https://developers.sanadwa.com"
+    },
     "require": {
         "php": ">=8.1",
         "guzzlehttp/guzzle": "^7",
