@@ -22,19 +22,19 @@ interface SendWire {
 interface MessageWire {
   success: true;
   data: {
-    id: string;
-    provider_msg_id: string | null;
-    status: string;
-    sent_at: string;
-    template_name: string | null;
-    to_phone: string;
-    channel: string;
-    provider: string;
-    error: string | null;
-    delivered_at: string | null;
-    read_at: string | null;
-    failed_at: string | null;
-    last_status: string | null;
+    id: string | number;
+    provider_msg_id?: string | null;
+    status?: string | null;
+    sent_at?: string | null;
+    template_name?: string | null;
+    to_phone?: string | null;
+    channel?: string | null;
+    provider?: string | null;
+    error?: string | null;
+    delivered_at?: string | null;
+    read_at?: string | null;
+    failed_at?: string | null;
+    last_status?: string | null;
   };
 }
 
@@ -92,6 +92,10 @@ const postMessage = async (
 /**
  * POST /messages/template — send an approved WhatsApp template message.
  *
+ * When `templateLanguage` is omitted the API sends the template in Arabic
+ * (`ar`). A WhatsApp-side failure throws `SendFailedError` and is never
+ * retried automatically.
+ *
  * The SDK sends the caller's `Idempotency-Key`, or generates a UUID v4 when
  * absent. The same value is reused across retries so duplicate sends are
  * impossible.
@@ -134,9 +138,15 @@ export const sendTextReply = async (
 };
 
 /**
- * GET /messages/:id — fetch a previously sent message by id.
+ * GET /messages/:id — fetch a previously sent message.
  *
- * Bubbles up `NotFoundError` for unknown ids.
+ * Pass the WhatsApp message id (`wamid.…`) returned as `messageId` by
+ * `send()` / `sendText()`, or a status webhook's `providerMsgId`. Do not pass
+ * `Message.id` or a status webhook's `messageId`: those are SanadWA row ids
+ * and the API answers 404 `message_not_found` (`NotFoundError`) for anything
+ * that is not a `wamid.` id.
+ *
+ * `status`, `sentAt`, `toPhone`, `channel` and `provider` can be `null`.
  */
 export const getMessage = async (req: Requester, id: string): Promise<Message> => {
   const raw = await req<MessageWire>({
@@ -145,18 +155,18 @@ export const getMessage = async (req: Requester, id: string): Promise<Message> =
   });
   const d = raw.data;
   return {
-    id: d.id,
-    providerMsgId: d.provider_msg_id,
-    status: d.status,
-    sentAt: d.sent_at,
-    templateName: d.template_name,
-    toPhone: d.to_phone,
-    channel: d.channel,
-    provider: d.provider,
-    error: d.error,
-    deliveredAt: d.delivered_at,
-    readAt: d.read_at,
-    failedAt: d.failed_at,
-    lastStatus: d.last_status,
+    id: String(d.id),
+    providerMsgId: d.provider_msg_id ?? null,
+    status: d.status ?? null,
+    sentAt: d.sent_at ?? null,
+    templateName: d.template_name ?? null,
+    toPhone: d.to_phone ?? null,
+    channel: d.channel ?? null,
+    provider: d.provider ?? null,
+    error: d.error ?? null,
+    deliveredAt: d.delivered_at ?? null,
+    readAt: d.read_at ?? null,
+    failedAt: d.failed_at ?? null,
+    lastStatus: d.last_status ?? null,
   };
 };

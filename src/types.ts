@@ -8,10 +8,19 @@
 export interface ClientOptions {
   /** Tenant API key (e.g. `pk_live_…`). Required. */
   apiKey: string;
-  /** Override base URL (default: `https://api.sanadwa.com/api/public/v1`). */
+  /**
+   * Override base URL (default: `https://api.sanadwa.com/v1`). The older
+   * `https://api.sanadwa.com/api/public/v1` serves the same routes and is
+   * used unchanged when passed here.
+   */
   baseUrl?: string;
   /** Total attempts including the first request (default: 5). */
   retries?: number;
+  /**
+   * Timeout for each attempt in milliseconds (default: 30000). A timed-out
+   * attempt is retried like a network failure. `0` disables the timeout.
+   */
+  timeoutMs?: number;
   /** Inject a custom `fetch` implementation for testing. */
   fetch?: typeof fetch;
   /** Override the User-Agent header. */
@@ -27,15 +36,28 @@ export interface HealthResponse {
 export interface Template {
   name: string;
   language: string;
-  category: string;
+  category: string | null;
   status: string;
+  /** WhatsApp Business Account the template belongs to. */
+  wabaId: string | null;
   components: unknown | null;
 }
 
 export interface ListTemplatesOptions {
+  /** 1-based page (default 1). */
   page?: number;
+  /** Page size (default 50, maximum 200). */
   limit?: number;
+  /** Search text matched against the template name. */
   q?: string;
+  /**
+   * Only templates the given sender can use (a number can only send its own
+   * WhatsApp account's templates). Wins over `wabaId` when both are set. An
+   * unknown id is answered 404 `phone_not_found` (`NotFoundError`).
+   */
+  phoneNumberId?: string;
+  /** Only templates of this WhatsApp Business Account. */
+  wabaId?: string;
 }
 
 export interface ListTemplatesResponse {
@@ -48,6 +70,7 @@ export interface SendMessageOptions {
   phoneNumberId: string;
   toPhone: string;
   templateName: string;
+  /** Optional. When omitted the API sends the template in Arabic (`ar`). */
   templateLanguage?: string;
   templateParams?: string[];
   templateComponents?: unknown[];
@@ -86,15 +109,22 @@ export interface SendTextReplyResponse extends SendMessageResponse {
 }
 
 export interface Message {
+  /** SanadWA's row id. Not accepted by `messages.get()`; use `providerMsgId`. */
   id: string;
+  /** The WhatsApp message id (`wamid.…`). */
   providerMsgId: string | null;
-  status: string;
-  sentAt: string;
+  /**
+   * Known values: `sent`, `delivered`, `read`, `failed`. Other values
+   * (`queued`, `received`) are possible for rows not sent through this API;
+   * treat an unknown value as not final.
+   */
+  status: string | null;
+  sentAt: string | null;
   /** Null for free-form text replies. */
   templateName: string | null;
-  toPhone: string;
-  channel: string;
-  provider: string;
+  toPhone: string | null;
+  channel: string | null;
+  provider: string | null;
   error: string | null;
   deliveredAt: string | null;
   readAt: string | null;

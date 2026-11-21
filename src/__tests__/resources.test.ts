@@ -52,6 +52,71 @@ describe('templates resource', () => {
     });
     await listTemplates(req);
     expect(calls[0]!.query).toBeUndefined();
+    expect('query' in calls[0]!).toBe(false);
+  });
+
+  it('sends query keys in the order page, limit, q, phone_number_id, waba_id', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, page: 1, limit: 10, data: [] } as unknown as T;
+    });
+    await listTemplates(req, { wabaId: '900000000000001', phoneNumberId: '100000000000001', q: 'hi', limit: 10, page: 1 });
+    expect(Object.entries(calls[0]!.query!)).toEqual([
+      ['page', 1],
+      ['limit', 10],
+      ['q', 'hi'],
+      ['phone_number_id', '100000000000001'],
+      ['waba_id', '900000000000001'],
+    ]);
+  });
+
+  it('sends only the filters the caller set', async () => {
+    const calls: RequestOptions[] = [];
+    const req = mkRequester(async <T>(opts: RequestOptions) => {
+      calls.push(opts);
+      return { success: true, page: 1, limit: 50, data: [] } as unknown as T;
+    });
+    await listTemplates(req, { phoneNumberId: '100000000000001' });
+    expect(calls[0]!.query).toEqual({ phone_number_id: '100000000000001' });
+    await listTemplates(req, { wabaId: '900000000000001' });
+    expect(calls[1]!.query).toEqual({ waba_id: '900000000000001' });
+  });
+
+  it('maps each row explicitly, waba_id → wabaId', async () => {
+    const components = [{ type: 'BODY', text: 'Hello {{1}}' }];
+    const req = mkRequester(async <T>() => ({
+      success: true,
+      page: 1,
+      limit: 50,
+      data: [
+        { name: 'hello_world', language: 'en', category: 'UTILITY', status: 'APPROVED', waba_id: '900000000000001', components },
+        { name: 'no_category', language: 'ar', category: null, status: 'APPROVED', waba_id: '900000000000001', components: null },
+        { name: 'legacy_row', language: 'ar', status: 'APPROVED' },
+      ],
+    }) as unknown as T);
+
+    const out = await listTemplates(req);
+
+    expect(out).toEqual({
+      page: 1,
+      limit: 50,
+      data: [
+        { name: 'hello_world', language: 'en', category: 'UTILITY', status: 'APPROVED', wabaId: '900000000000001', components },
+        { name: 'no_category', language: 'ar', category: null, status: 'APPROVED', wabaId: '900000000000001', components: null },
+        { name: 'legacy_row', language: 'ar', category: null, status: 'APPROVED', wabaId: null, components: null },
+      ],
+    });
+    expect('waba_id' in out.data[0]!).toBe(false);
+  });
+
+  it('propagates 404 phone_not_found as NotFoundError', async () => {
+    const req = mkRequester(async () => {
+      throw new NotFoundError({ message: 'no', code: 'phone_not_found', status: 404 });
+    });
+    const error = await listTemplates(req, { phoneNumberId: '1' }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(NotFoundError);
+    expect((error as NotFoundError).code).toBe('phone_not_found');
   });
 });
 
@@ -74,7 +139,7 @@ describe('messages.send', () => {
 
     const out = await sendMessage(req, {
       phoneNumberId: 'PNID',
-      toPhone: '+962790000000',
+      toPhone: '+12025550123',
       templateName: 'hello_world',
       templateLanguage: 'en',
       templateParams: ['Alice'],
@@ -85,7 +150,7 @@ describe('messages.send', () => {
     expect(calls[0]!.idempotent).toBe(true);
     expect(calls[0]!.body).toEqual({
       phone_number_id: 'PNID',
-      to_phone: '+962790000000',
+      to_phone: '+12025550123',
       template_name: 'hello_world',
       template_language: 'en',
       template_params: ['Alice'],
@@ -231,6 +296,52 @@ describe('messages.get', () => {
     const out = await getMessage(req, 'wa_text');
 
     expect(out.templateName).toBeNull();
+  });
+
+  it('maps the five newly nullable fields as null without throwing', async () => {
+    const req = mkRequester(async <T>() => ({
+      success: true,
+      data: {
+        id: '98765', provider_msg_id: 'wamid.FAKE_0001', status: null, sent_at: null,
+        template_name: null, to_phone: null, channel: null, provider: null,
+        error: null, delivered_at: null, read_at: null, failed_at: null, last_status: null,
+      },
+    }) as unknown as T);
+
+    const out = await getMessage(req, 'wamid.FAKE_0001');
+
+    expect(out).toEqual({
+      id: '98765', providerMsgId: 'wamid.FAKE_0001', status: null, sentAt: null,
+      templateName: null, toPhone: null, channel: null, provider: null,
+      error: null, deliveredAt: null, readAt: null, failedAt: null, lastStatus: null,
+    });
+  });
+
+  it('maps missing nullable keys to null', async () => {
+    const req = mkRequester(async <T>() => ({ success: true, data: { id: '7' } }) as unknown as T);
+    const out = await getMessage(req, 'wamid.FAKE_0002');
+    expect(out).toEqual({
+      id: '7', providerMsgId: null, status: null, sentAt: null,
+      templateName: null, toPhone: null, channel: null, provider: null,
+      error: null, deliveredAt: null, readAt: null, failedAt: null, lastStatus: null,
+    });
+  });
+
+  it('coerces a numeric id to a string and leaves a string id unchanged', async () => {
+    const mk = (id: unknown) => mkRequester(async <T>() => ({
+      success: true,
+      data: { id, provider_msg_id: 'wamid.FAKE_0003', status: 'delivered' },
+    }) as unknown as T);
+
+    expect((await getMessage(mk(98765), 'wamid.FAKE_0003')).id).toBe('98765');
+    expect((await getMessage(mk('98765'), 'wamid.FAKE_0003')).id).toBe('98765');
+  });
+
+  it('passes an unknown status string through', async () => {
+    const req = mkRequester(async <T>() => ({
+      success: true, data: { id: '1', status: 'queued' },
+    }) as unknown as T);
+    expect((await getMessage(req, 'wamid.FAKE_0004')).status).toBe('queued');
   });
 
   it('propagates NotFoundError from request layer', async () => {
