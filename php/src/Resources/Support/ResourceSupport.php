@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sanadwa\WhatsApp\Resources\Support;
 
+use Sanadwa\WhatsApp\Dto\DeletedResource;
 use Sanadwa\WhatsApp\Dto\Page;
 use Sanadwa\WhatsApp\Exceptions\SanadApiError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
@@ -113,6 +114,19 @@ final class ResourceSupport
             page: self::int($body, 'page', 'page'),
             limit: self::int($body, 'limit', 'limit'),
             data: $rows,
+        );
+    }
+
+    /**
+     * The `{ success, data: { id, deleted } }` answer of a DELETE.
+     */
+    public static function deletedResource(mixed $raw): DeletedResource
+    {
+        $data = self::dataObject($raw);
+
+        return new DeletedResource(
+            id: ResponseValidator::requiredStringOrNumber($data, 'id', 'data.id'),
+            deleted: self::bool($data, 'deleted', 'data.deleted'),
         );
     }
 
