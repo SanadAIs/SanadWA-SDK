@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Sanadwa\WhatsApp\Laravel;
 
+use Sanadwa\WhatsApp\Config;
 use Sanadwa\WhatsApp\SanadWhatsApp;
 
 if (!class_exists(\Illuminate\Support\ServiceProvider::class)) {
@@ -22,8 +23,7 @@ final class SanadWhatsAppServiceProvider extends \Illuminate\Support\ServiceProv
 
             return new SanadWhatsApp([
                 'apiKey' => $config['api_key'] ?? null,
-                'baseUrl' => $config['base_url']
-                    ?? 'https://api.sanadwa.com/api/public/v1',
+                'baseUrl' => $config['base_url'] ?? Config::DEFAULT_BASE_URL,
                 'retries' => (int) ($config['retries'] ?? 5),
                 'timeout' => (float) ($config['timeout'] ?? 30.0),
                 'connectTimeout' => (float) ($config['connect_timeout'] ?? 10.0),

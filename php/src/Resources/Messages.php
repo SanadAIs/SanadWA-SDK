@@ -127,6 +127,14 @@ final class Messages
         );
     }
 
+    /**
+     * Looks up one message.
+     *
+     * Pass the WhatsApp message id (`wamid.…`) returned as `messageId` by `send()` /
+     * `sendText()`, or a status webhook's `providerMsgId`. Do not pass `Message::$id` or a
+     * status webhook's `messageId`: those are SanadWA row ids and the API answers 404
+     * `message_not_found` for anything that is not a `wamid.` id.
+     */
     public function get(string $id): Message
     {
         $raw = ResponseValidator::body(
@@ -135,22 +143,34 @@ final class Messages
         $data = ResponseValidator::requiredArray($raw, 'data');
 
         return new Message(
-            id: ResponseValidator::requiredString($data, 'id', 'data.id'),
+            id: ResponseValidator::requiredStringOrNumber($data, 'id', 'data.id'),
             providerMsgId: ResponseValidator::optionalNullableString(
                 $data,
                 'provider_msg_id',
                 'data.provider_msg_id',
             ),
-            status: ResponseValidator::requiredString($data, 'status', 'data.status'),
-            sentAt: ResponseValidator::requiredNullableString($data, 'sent_at', 'data.sent_at'),
-            templateName: ResponseValidator::requiredNullableString(
+            status: ResponseValidator::optionalNullableString($data, 'status', 'data.status'),
+            sentAt: ResponseValidator::optionalNullableString($data, 'sent_at', 'data.sent_at'),
+            templateName: ResponseValidator::optionalNullableString(
                 $data,
                 'template_name',
                 'data.template_name',
             ),
-            toPhone: ResponseValidator::requiredString($data, 'to_phone', 'data.to_phone'),
-            channel: ResponseValidator::requiredString($data, 'channel', 'data.channel'),
-            provider: ResponseValidator::requiredString($data, 'provider', 'data.provider'),
+            toPhone: ResponseValidator::optionalNullableString(
+                $data,
+                'to_phone',
+                'data.to_phone',
+            ),
+            channel: ResponseValidator::optionalNullableString(
+                $data,
+                'channel',
+                'data.channel',
+            ),
+            provider: ResponseValidator::optionalNullableString(
+                $data,
+                'provider',
+                'data.provider',
+            ),
             error: ResponseValidator::optionalNullableString($data, 'error', 'data.error'),
             deliveredAt: ResponseValidator::optionalNullableString(
                 $data,

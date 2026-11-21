@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sanadwa\WhatsApp\Tests;
 
 use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 use Sanadwa\WhatsApp\Config;
 use Sanadwa\WhatsApp\Http\Requester;
@@ -48,6 +49,61 @@ final class ConfigTest extends TestCase
         ));
 
         self::assertSame($client, $this->httpClientFrom($sdk));
+    }
+
+    public function testDefaultBaseUrlIsTheShortPath(): void
+    {
+        $client = new FakeHttpClient([$this->healthResponse()]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        $sdk->health();
+
+        self::assertSame('https://api.sanadwa.com/v1', Config::DEFAULT_BASE_URL);
+        self::assertSame(
+            'https://api.sanadwa.com/v1/health',
+            (string) $client->requests[0]->getUri(),
+        );
+    }
+
+    public function testExplicitOldBaseUrlIsUsedUnchanged(): void
+    {
+        $client = new FakeHttpClient([$this->healthResponse()]);
+        $sdk = new SanadWhatsApp([
+            'apiKey' => 'pk_test_fake_key',
+            'baseUrl' => 'https://api.sanadwa.com/api/public/v1',
+            'httpClient' => $client,
+        ]);
+
+        $sdk->health();
+
+        self::assertSame(
+            'https://api.sanadwa.com/api/public/v1/health',
+            (string) $client->requests[0]->getUri(),
+        );
+    }
+
+    public function testDefaultUserAgentCarriesTheReleaseVersion(): void
+    {
+        $client = new FakeHttpClient([$this->healthResponse()]);
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test_fake_key', 'httpClient' => $client]);
+
+        $sdk->health();
+
+        self::assertSame('0.4.0', SanadWhatsApp::VERSION);
+        self::assertSame(
+            '@sanadwa/whatsapp-sdk-php/0.4.0',
+            $client->requests[0]->getHeaderLine('User-Agent'),
+        );
+    }
+
+    private function healthResponse(): Response
+    {
+        return new Response(200, [], json_encode([
+            'success' => true,
+            'tenant_id' => 1,
+            'scope' => 'read',
+            'server_time' => '2026-11-21T10:00:00.000Z',
+        ], JSON_THROW_ON_ERROR));
     }
 
     private function httpClientFrom(SanadWhatsApp $sdk): object

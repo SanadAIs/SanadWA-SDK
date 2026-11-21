@@ -15,8 +15,21 @@ final class Templates
     {
     }
 
-    public function list(?int $page = null, ?int $limit = null, ?string $q = null): ListTemplatesResponse
-    {
+    /**
+     * Lists the account's APPROVED templates.
+     *
+     * @param string|null $phoneNumberId Only the templates this phone number can send
+     *     (`phone_number_id`). An unknown id is answered 404 `phone_not_found`.
+     * @param string|null $wabaId Only the templates of this WhatsApp Business Account
+     *     (`waba_id`). Ignored by the API when `$phoneNumberId` is also sent.
+     */
+    public function list(
+        ?int $page = null,
+        ?int $limit = null,
+        ?string $q = null,
+        ?string $phoneNumberId = null,
+        ?string $wabaId = null,
+    ): ListTemplatesResponse {
         $query = [];
         if ($page !== null) {
             $query['page'] = $page;
@@ -26,6 +39,12 @@ final class Templates
         }
         if ($q !== null) {
             $query['q'] = $q;
+        }
+        if ($phoneNumberId !== null) {
+            $query['phone_number_id'] = $phoneNumberId;
+        }
+        if ($wabaId !== null) {
+            $query['waba_id'] = $wabaId;
         }
 
         $raw = ResponseValidator::body(
@@ -47,13 +66,18 @@ final class Templates
                     'language',
                     $field . '.language',
                 ),
-                category: ResponseValidator::requiredString(
+                category: ResponseValidator::optionalNullableString(
                     $template,
                     'category',
                     $field . '.category',
                 ),
                 status: ResponseValidator::requiredString($template, 'status', $field . '.status'),
                 components: $template['components'] ?? null,
+                wabaId: ResponseValidator::optionalNullableStringOrNumber(
+                    $template,
+                    'waba_id',
+                    $field . '.waba_id',
+                ),
             );
         }
 
