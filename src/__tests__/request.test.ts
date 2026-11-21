@@ -765,6 +765,53 @@ describe('createRequester — timeout', () => {
   });
 });
 
+
+describe('createRequester — timeout while reading the body', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  // A 200 whose body never arrives: the attempt's signal aborts the read.
+  const stalledResponse = (): Response => {
+    const res = new Response('{}', { status: 200 });
+    vi.spyOn(res, 'text').mockRejectedValue(
+      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    );
+    return res;
+  };
+
+  it('retries, reusing the Idempotency-Key, and returns the next success', async () => {
+    const onHeaders = vi.fn();
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(stalledResponse())
+      .mockResolvedValueOnce(mkResponse(200, { ok: true }));
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'POST', path: '/x', body: { a: 1 }, idempotent: true, onHeaders });
+    await vi.runAllTimersAsync();
+    await expect(p).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const key = (i: number) => ((fetchImpl.mock.calls[i]![1] as RequestInit).headers as Record<string, string>)['Idempotency-Key'];
+    expect(key(0)).toBe(key(1));
+    expect(onHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends as ServerError code timeout, status 0, after the last attempt', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(stalledResponse()));
+    const req = createRequester({ ...baseOpts, retries: 2, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/x' }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const err = await p;
+    expect(err).toBeInstanceOf(ServerError);
+    expect((err as ServerError).code).toBe('timeout');
+    expect((err as ServerError).status).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ---------- 0.4.0: multipart transport (spec 2.9) ----------
 
 describe('createRequester — formData', () => {

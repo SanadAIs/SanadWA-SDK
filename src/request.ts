@@ -255,10 +255,14 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       if (timeoutMs > 0) init.signal = AbortSignal.timeout(timeoutMs);
 
       let res: Response;
+      // Body of a 2xx answer. Read inside the same guard as the fetch: the
+      // attempt's timeout also covers a body that stalls mid-transfer.
+      let successText = '';
       try {
         res = await fetchImpl(url, init);
+        if (res.ok) successText = await res.text();
       } catch (err) {
-        // No response (network failure or attempt timeout): retryable.
+        // No usable response (network failure or attempt timeout): retryable.
         if (attempt < maxAttempts) {
           await sleep(computeBackoff(attempt, null));
           continue;
@@ -277,9 +281,8 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       if (res.ok) {
         if (reqOpts.onHeaders) reqOpts.onHeaders(res.headers);
         // 204 / empty body → return undefined cast as T.
-        const text = await res.text();
-        if (text.length === 0) return undefined as T;
-        return JSON.parse(text) as T;
+        if (successText.length === 0) return undefined as T;
+        return JSON.parse(successText) as T;
       }
 
       let bodyJson: ErrorBody = {};
