@@ -74,7 +74,8 @@ export interface CreditUsage {
 }
 
 export interface CreditBalance {
-  billingType: 'prepaid' | 'postpaid';
+  /** `prepaid` or `postpaid` today. A value the SDK does not know is passed through. */
+  billingType: 'prepaid' | 'postpaid' | (string & {});
   /** `null` for accounts without a prepaid balance. */
   availableCredits: number | null;
   paidCreditsRemaining: number | null;
@@ -174,7 +175,16 @@ export interface ImportContactsInput {
   filename?: string;
   /** Applied to every row. At most 50 names of at most 100 characters; a name may not contain `,`. */
   tags?: string[];
+  /**
+   * Pass your own key for a large file: when an attempt times out you can
+   * call again with the same key to get the result of the first call.
+   */
   idempotencyKey?: string;
+  /**
+   * Timeout for each attempt of this call in milliseconds. `0` disables it.
+   * Default: 300000, or the client's `timeoutMs` when that is longer or `0`.
+   */
+  timeoutMs?: number;
 }
 
 export interface ContactImportSummary {
@@ -256,7 +266,8 @@ export interface Campaign {
   startAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
-  createdVia: 'api' | 'console';
+  /** `api` or `console` today. A value the SDK does not know is passed through. */
+  createdVia: 'api' | 'console' | (string & {});
   counts: CampaignCounts;
   /** `null` on `list()` (the list endpoint leaves it out); set on create, get, pause and resume. */
   clicks: CampaignClicks | null;

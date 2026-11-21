@@ -25,8 +25,17 @@ final class Contacts
     private const UPSERT_MAX_CONTACTS = 100;
     private const IMPORT_MAX_BYTES = 5242880;
 
-    public function __construct(private readonly Requester $requester)
-    {
+    private readonly Requester $importRequester;
+
+    /**
+     * @param Requester|null $importRequester Used for `import()` only: a requester whose HTTP
+     *     client allows a long attempt. Defaults to `$requester`.
+     */
+    public function __construct(
+        private readonly Requester $requester,
+        ?Requester $importRequester = null,
+    ) {
+        $this->importRequester = $importRequester ?? $requester;
     }
 
     /**
@@ -154,6 +163,14 @@ final class Contacts
      * for them: read `errors`, where `row` is the CSV line (the header is
      * line 1).
      *
+     * The API answers only when every row is handled. With the default Guzzle
+     * client one attempt gets at least 300 s (`Config::IMPORT_MIN_TIMEOUT`); a
+     * client you pass as `httpClient` keeps its own timeout. If an attempt
+     * still times out, the import keeps running on the server and the retries
+     * with the same key are answered 409 `idempotency_in_progress`
+     * (`RateLimitedError`): pass your own `$idempotencyKey` and call again with
+     * it later to get the stored result.
+     *
      * @param string $csv CSV bytes, not a file path.
      * @param list<string> $tags
      */
@@ -192,7 +209,7 @@ final class Contacts
             $parts[] = ['name' => 'tags', 'contents' => implode(',', $tags)];
         }
 
-        $raw = $this->requester->request(
+        $raw = $this->importRequester->request(
             method: 'POST',
             path: '/contacts/import',
             idempotent: true,

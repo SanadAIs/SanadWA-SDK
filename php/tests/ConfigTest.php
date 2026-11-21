@@ -38,6 +38,40 @@ final class ConfigTest extends TestCase
         self::assertSame(4.0, $client->getConfig('connect_timeout'));
     }
 
+    public function testImportUsesAClientWithAtLeastFiveMinutesPerAttempt(): void
+    {
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'connectTimeout' => 4]);
+        $client = $this->importHttpClientFrom($sdk);
+
+        self::assertInstanceOf(Client::class, $client);
+        self::assertSame(300.0, Config::IMPORT_MIN_TIMEOUT);
+        self::assertSame(300.0, $client->getConfig('timeout'));
+        self::assertSame(4.0, $client->getConfig('connect_timeout'));
+        self::assertNotSame($this->httpClientFrom($sdk), $client);
+    }
+
+    public function testImportKeepsALongerConfiguredTimeout(): void
+    {
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'timeout' => 900]);
+
+        self::assertSame(900.0, $this->importHttpClientFrom($sdk)->getConfig('timeout'));
+    }
+
+    public function testImportKeepsADisabledTimeoutDisabled(): void
+    {
+        $sdk = new SanadWhatsApp(['apiKey' => 'pk_test', 'timeout' => 0]);
+
+        self::assertSame(0.0, $this->importHttpClientFrom($sdk)->getConfig('timeout'));
+    }
+
+    public function testImportUsesTheCallerSuppliedHttpClient(): void
+    {
+        $client = new FakeHttpClient([]);
+        $sdk = new SanadWhatsApp(new Config(apiKey: 'pk_test', httpClient: $client));
+
+        self::assertSame($client, $this->importHttpClientFrom($sdk));
+    }
+
     public function testCallerSuppliedHttpClientWinsUntouched(): void
     {
         $client = new FakeHttpClient([]);
@@ -104,6 +138,19 @@ final class ConfigTest extends TestCase
             'scope' => 'read',
             'server_time' => '2026-11-21T10:00:00.000Z',
         ], JSON_THROW_ON_ERROR));
+    }
+
+    private function importHttpClientFrom(SanadWhatsApp $sdk): object
+    {
+        $contactsProperty = new \ReflectionProperty($sdk, 'contactsResource');
+        $contacts = $contactsProperty->getValue($sdk);
+        $requesterProperty = new \ReflectionProperty($contacts, 'importRequester');
+        $requester = $requesterProperty->getValue($contacts);
+        self::assertInstanceOf(Requester::class, $requester);
+
+        $clientProperty = new \ReflectionProperty($requester, 'httpClient');
+
+        return $clientProperty->getValue($requester);
     }
 
     private function httpClientFrom(SanadWhatsApp $sdk): object

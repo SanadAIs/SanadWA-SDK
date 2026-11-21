@@ -12,6 +12,9 @@ import {
   toNullableNumber,
   toStringList,
   toDeletedResource,
+  toDataRecord,
+  toDataList,
+  toRequiredString,
 } from '../resources/resource-helpers.js';
 import { ValidationError } from '../errors.js';
 
@@ -112,8 +115,18 @@ describe('wire readers', () => {
   it('toId coerces strings and numbers', () => {
     expect(toId('7')).toBe('7');
     expect(toId(7)).toBe('7');
-    expect(toId(null)).toBe('');
-    expect(toId(undefined)).toBe('');
+  });
+
+  it('toId throws malformed_response for a missing or mistyped id', () => {
+    expect(caught(() => toId(undefined))).toMatchObject({
+      code: 'malformed_response',
+      status: 0,
+      message: 'Malformed response: field `id` is missing.',
+    });
+    expect(caught(() => toId(null, 'data.id'))).toMatchObject({
+      code: 'malformed_response',
+      message: 'Malformed response: field `data.id` must be a string or number.',
+    });
   });
 
   it('toNullableString maps missing and null to null', () => {
@@ -146,12 +159,46 @@ describe('wire readers', () => {
     expect(page).toEqual({ page: 2, limit: 10, data: [10, 20] });
   });
 
-  it('toPage tolerates a missing data array', () => {
-    expect(toPage({ page: 1, limit: 50 }, (row) => row)).toEqual({ page: 1, limit: 50, data: [] });
+  it.each([
+    ['a missing data array', { page: 1, limit: 50 }, 'data'],
+    ['data that is not an array', { page: 1, limit: 50, data: {} }, 'data'],
+    ['a row that is not an object', { page: 1, limit: 50, data: ['x'] }, 'data[0]'],
+    ['a missing page', { limit: 50, data: [] }, 'page'],
+    ['a missing limit', { page: 1, data: [] }, 'limit'],
+    ['a limit that is not a number', { page: 1, limit: '50', data: [] }, 'limit'],
+    ['a body that is not an object', 'ok', 'body'],
+  ])('toPage throws malformed_response for %s', (_name, body, field) => {
+    const err = caught(() => toPage(body, (row) => row));
+    expect(err).toMatchObject({ code: 'malformed_response', status: 0 });
+    expect((err as Error).message).toContain(`\`${field}\``);
+  });
+
+  it('toPage never returns the 0/0/[] page that would loop a paging caller forever', () => {
+    expect(caught(() => toPage({ success: true }, (row) => row))).toMatchObject({ code: 'malformed_response' });
+  });
+
+  it('toDataRecord and toDataList read the data envelope strictly', () => {
+    expect(toDataRecord({ success: true, data: { a: 1 } })).toEqual({ a: 1 });
+    expect(toDataList({ success: true, data: [{ a: 1 }] })).toEqual([{ a: 1 }]);
+    expect(caught(() => toDataRecord({ success: true }))).toMatchObject({ code: 'malformed_response' });
+    expect(caught(() => toDataRecord({ data: [] }))).toMatchObject({ code: 'malformed_response' });
+    expect(caught(() => toDataList({ data: {} }))).toMatchObject({ code: 'malformed_response' });
+  });
+
+  it('toRequiredString passes any string through and refuses the rest', () => {
+    expect(toRequiredString('trial', 'data.billing_type')).toBe('trial');
+    expect(caught(() => toRequiredString(undefined, 'data.billing_type'))).toMatchObject({
+      code: 'malformed_response',
+      message: 'Malformed response: field `data.billing_type` is missing.',
+    });
   });
 
   it('toDeletedResource reads data.id and data.deleted', () => {
     expect(toDeletedResource({ success: true, data: { id: 42, deleted: true } })).toEqual({ id: '42', deleted: true });
-    expect(toDeletedResource({ success: true, data: { id: '42' } })).toEqual({ id: '42', deleted: false });
+    expect(toDeletedResource({ success: true, data: { id: '42', deleted: false } })).toEqual({ id: '42', deleted: false });
+    expect(caught(() => toDeletedResource({ success: true, data: { id: '42' } })))
+      .toMatchObject({ code: 'malformed_response' });
+    expect(caught(() => toDeletedResource({ success: true })))
+      .toMatchObject({ code: 'malformed_response' });
   });
 });

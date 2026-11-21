@@ -66,7 +66,7 @@ final class MessagesGetTest extends TestCase
                 'status' => 'accepted',
                 'sent_at' => null,
                 'template_name' => null,
-                'to_phone' => '+966500000001',
+                'to_phone' => '+12025550123',
                 'channel' => 'whatsapp',
                 'provider' => 'meta',
                 'error' => null,

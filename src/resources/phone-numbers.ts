@@ -1,14 +1,14 @@
 import type { Requester } from '../request.js';
 import type { ListPhoneNumbersResponse, PhoneNumber } from '../resource-types.js';
-import { toId, toNullableString, toRecord, toRecordList, type WireRecord } from './resource-helpers.js';
+import { toDataList, toId, toNullableString, type WireRecord } from './resource-helpers.js';
 
 const toPhoneNumber = (row: WireRecord): PhoneNumber => ({
-  phoneNumberId: toId(row.phone_number_id),
+  phoneNumberId: toId(row.phone_number_id, 'phone_number_id'),
   displayPhoneNumber: toNullableString(row.display_phone_number),
   verifiedName: toNullableString(row.verified_name),
   nameStatus: toNullableString(row.name_status),
   newNameStatus: toNullableString(row.new_name_status),
-  wabaId: toId(row.waba_id),
+  wabaId: toId(row.waba_id, 'waba_id'),
   qualityRating: toNullableString(row.quality_rating),
   status: toNullableString(row.status),
 });
@@ -28,6 +28,6 @@ export class PhoneNumbersResource {
    */
   readonly list = async (): Promise<ListPhoneNumbersResponse> => {
     const raw = await this.#req<unknown>({ method: 'GET', path: '/phone-numbers' });
-    return { data: toRecordList(toRecord(raw).data).map(toPhoneNumber) };
+    return { data: toDataList(raw).map(toPhoneNumber) };
   };
 }

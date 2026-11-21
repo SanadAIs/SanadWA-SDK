@@ -81,8 +81,12 @@ final class TestFixtures
     {
         $messageId = $overrides['messageId'] ?? '4242';
         $deliveredAt = $overrides['deliveredAt'] ?? '2026-05-10T12:00:00.000Z';
-        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED';
-        $toPhone = $overrides['toPhone'] ?? '+966500000000';
+        $providerMsgId = self::nullableOverride(
+            $overrides,
+            'providerMsgId',
+            'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED',
+        );
+        $toPhone = self::nullableOverride($overrides, 'toPhone', '+966500000000');
         $data = [
             'message_id' => $messageId,
             'provider_msg_id' => $providerMsgId,
@@ -108,8 +112,12 @@ final class TestFixtures
     {
         $messageId = $overrides['messageId'] ?? '4243';
         $readAt = $overrides['readAt'] ?? '2026-05-10T12:01:00.000Z';
-        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_READ';
-        $toPhone = $overrides['toPhone'] ?? '+966500000000';
+        $providerMsgId = self::nullableOverride(
+            $overrides,
+            'providerMsgId',
+            'wamid.HBgMOTY2NTAwMDAwMDAw_READ',
+        );
+        $toPhone = self::nullableOverride($overrides, 'toPhone', '+966500000000');
         $data = [
             'message_id' => $messageId,
             'provider_msg_id' => $providerMsgId,
@@ -145,12 +153,23 @@ final class TestFixtures
         $errorData = array_key_exists('errorData', $overrides)
             ? $overrides['errorData']
             : ['details' => $engagementDetails];
-        $details = array_key_exists('details', $overrides)
-            ? $overrides['details']
-            : $engagementDetails;
-        $errorUserMsg = $overrides['errorUserMsg'] ?? null;
-        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_FAILED';
-        $toPhone = $overrides['toPhone'] ?? '+966500000000';
+        // Like the API, `details` and `errorUserMsg` default to the values in `errorData`.
+        $details = self::nullableOverride(
+            $overrides,
+            'details',
+            self::nonEmptyString(is_array($errorData) ? ($errorData['details'] ?? null) : null),
+        );
+        $errorUserMsg = self::nullableOverride(
+            $overrides,
+            'errorUserMsg',
+            self::nonEmptyString(is_array($errorData) ? ($errorData['error_user_msg'] ?? null) : null),
+        );
+        $providerMsgId = self::nullableOverride(
+            $overrides,
+            'providerMsgId',
+            'wamid.HBgMOTY2NTAwMDAwMDAw_FAILED',
+        );
+        $toPhone = self::nullableOverride($overrides, 'toPhone', '+966500000000');
         // Production always sends all six keys, null when absent.
         $error = [
             'code' => $code,
@@ -289,5 +308,18 @@ final class TestFixtures
             'recognized' => $recognized,
             'eventType' => $event,
         ];
+    }
+
+    /**
+     * The override when its key is present, also when it is null; otherwise the default.
+     */
+    private static function nullableOverride(array $overrides, string $key, mixed $default): mixed
+    {
+        return array_key_exists($key, $overrides) ? $overrides[$key] : $default;
+    }
+
+    private static function nonEmptyString(mixed $value): ?string
+    {
+        return is_string($value) && $value !== '' ? $value : null;
     }
 }

@@ -20,7 +20,8 @@
  * });
  * ```
  *
- * Fixtures: `createMessageSentFixture`, `createMessageDeliveredFixture`,
+ * Fixtures: `createMessageSentFixture`, `createTextMessageSentFixture`,
+ * `createMessageDeliveredFixture`,
  * `createMessageReadFixture`, `createMessageFailedFixture`,
  * `createInboundMessageFixture`, `createTestEventFixture` (the console's
  * "Send test event" delivery) and `createUnknownEventFixture` (a signed
@@ -114,6 +115,48 @@ export const createMessageSentFixture = (
         templateName,
         templateLanguage,
         text: null,
+        sentAt,
+        raw: data,
+      },
+    },
+    overrides.secret,
+  );
+};
+
+/** `message.sent` for a free-form text reply (`messages.sendText()`). */
+export const createTextMessageSentFixture = (
+  overrides: {
+    messageId?: string;
+    toPhone?: string;
+    text?: string;
+    sentAt?: string;
+    secret?: string;
+  } = {},
+): WebhookFixture => {
+  const messageId = overrides.messageId ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_TEXT';
+  const toPhone = overrides.toPhone ?? '+966500000000';
+  const text = overrides.text ?? 'A free-form reply';
+  const sentAt = overrides.sentAt ?? '2026-07-21T12:00:00.000Z';
+  const data = {
+    message_id: messageId,
+    message_type: 'text',
+    to_phone: toPhone,
+    text,
+    template_name: null,
+    template_language: null,
+    sent_at: sentAt,
+  };
+  return buildFixture(
+    { event: 'message.sent', tenant_id: DEFAULT_TENANT_ID, data },
+    {
+      type: 'message.sent',
+      data: {
+        messageId,
+        messageType: 'text',
+        toPhone,
+        templateName: null,
+        templateLanguage: null,
+        text,
         sentAt,
         raw: data,
       },

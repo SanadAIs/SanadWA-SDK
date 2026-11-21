@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Sanadwa\WhatsApp;
 
 use GuzzleHttp\Client;
+use Psr\Http\Client\ClientInterface;
 use Sanadwa\WhatsApp\Dto\HealthResponse;
 use Sanadwa\WhatsApp\Http\Requester;
 use Sanadwa\WhatsApp\Resources\Balance;
@@ -38,18 +39,30 @@ final class SanadWhatsApp
             throw new \InvalidArgumentException('SanadWhatsApp: `apiKey` is required.');
         }
 
-        $requester = new Requester(
+        $userAgent = $resolved->userAgent ?? '@sanadwa/whatsapp-sdk-php/' . self::VERSION;
+        $newRequester = static fn (ClientInterface $httpClient): Requester => new Requester(
             apiKey: $resolved->apiKey,
             baseUrl: $resolved->baseUrl,
             retries: $resolved->retries,
-            httpClient: $resolved->httpClient ?? new Client([
-                'timeout' => $resolved->timeout,
-                'connect_timeout' => $resolved->connectTimeout,
-            ]),
-            userAgent: $resolved->userAgent
-                ?? '@sanadwa/whatsapp-sdk-php/' . self::VERSION,
+            httpClient: $httpClient,
+            userAgent: $userAgent,
             sleeper: $resolved->sleeper,
         );
+
+        $requester = $newRequester($resolved->httpClient ?? new Client([
+            'timeout' => $resolved->timeout,
+            'connect_timeout' => $resolved->connectTimeout,
+        ]));
+        // A caller-supplied client owns its timeouts; the default one gets a longer
+        // timeout for the CSV import, which answers only when every row is handled.
+        $importRequester = $resolved->httpClient !== null
+            ? $requester
+            : $newRequester(new Client([
+                'timeout' => $resolved->timeout > 0.0
+                    ? max($resolved->timeout, Config::IMPORT_MIN_TIMEOUT)
+                    : 0.0,
+                'connect_timeout' => $resolved->connectTimeout,
+            ]));
 
         $this->healthResource = new Health($requester);
         $this->templatesResource = new Templates($requester);
@@ -58,7 +71,7 @@ final class SanadWhatsApp
         $this->phoneNumbersResource = new PhoneNumbers($requester);
         $this->balanceResource = new Balance($requester);
         $this->tagsResource = new Tags($requester);
-        $this->contactsResource = new Contacts($requester);
+        $this->contactsResource = new Contacts($requester, $importRequester);
         $this->campaignsResource = new Campaigns($requester);
     }
 

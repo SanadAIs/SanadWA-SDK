@@ -19,6 +19,12 @@ const fixtures: Array<{ name: string; build: (secret?: string) => WebhookFixture
     eventType: 'message.sent',
   },
   {
+    name: 'createTextMessageSentFixture',
+    build: (secret) => __testFixtures.createTextMessageSentFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'message.sent',
+  },
+  {
     name: 'createMessageDeliveredFixture',
     build: (secret) => __testFixtures.createMessageDeliveredFixture(secret ? { secret } : {}),
     recognized: true,
@@ -251,5 +257,55 @@ describe('__testFixtures', () => {
       recognized: true,
       event: { type: 'inbound.message', data: { from: '+12025550123', text: 'custom' } },
     });
+  });
+
+  it('createTextMessageSentFixture is the text variant of message.sent and honors overrides', () => {
+    const f = __testFixtures.createTextMessageSentFixture({
+      messageId: 'wamid.TEXT_OVERRIDE',
+      toPhone: '+12025550123',
+      text: 'Thanks, we received your request.',
+      sentAt: '2026-11-21T09:00:00.000Z',
+    });
+    expect(JSON.parse(f.rawBody).data).toEqual({
+      message_id: 'wamid.TEXT_OVERRIDE',
+      message_type: 'text',
+      to_phone: '+12025550123',
+      text: 'Thanks, we received your request.',
+      template_name: null,
+      template_language: null,
+      sent_at: '2026-11-21T09:00:00.000Z',
+    });
+    const result = verifyFixture(f);
+    expect(result).toMatchObject({
+      valid: true,
+      recognized: true,
+      event: {
+        type: 'message.sent',
+        data: {
+          messageId: 'wamid.TEXT_OVERRIDE',
+          messageType: 'text',
+          toPhone: '+12025550123',
+          templateName: null,
+          templateLanguage: null,
+          text: 'Thanks, we received your request.',
+          sentAt: '2026-11-21T09:00:00.000Z',
+        },
+      },
+    });
+  });
+
+  it('status fixtures emit null provider_msg_id and to_phone when overridden with null', () => {
+    for (const build of [
+      __testFixtures.createMessageDeliveredFixture,
+      __testFixtures.createMessageReadFixture,
+      __testFixtures.createMessageFailedFixture,
+    ]) {
+      const f = build({ providerMsgId: null, toPhone: null });
+      expect(JSON.parse(f.rawBody).data).toMatchObject({ provider_msg_id: null, to_phone: null });
+      expect(verifyFixture(f)).toMatchObject({
+        valid: true,
+        event: { data: { providerMsgId: null, toPhone: null } },
+      });
+    }
   });
 });

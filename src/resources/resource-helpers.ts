@@ -2,7 +2,7 @@
  * Private helpers shared by the resources. Not exported from the package.
  */
 
-import { ValidationError } from '../errors.js';
+import { SanadApiError, ValidationError } from '../errors.js';
 import type { DeletedResource, ListOptions, Page } from '../resource-types.js';
 
 export type WireRecord = Record<string, unknown>;
@@ -77,6 +77,47 @@ export const pageQuery = (
 };
 
 // ── Wire readers ────────────────────────────────────────────────────────────
+//
+// The parts every answer must have (the `data` object or array, `page`,
+// `limit`, a row's id) are checked: a 2xx answer without them throws
+// `malformed_response`. Other fields are read leniently.
+
+/** Throws the error for a 2xx answer the SDK cannot read. */
+export const malformed = (field: string, reason: string): never => {
+  throw new SanadApiError({
+    message: `Malformed response: field \`${field}\` ${reason}.`,
+    code: 'malformed_response',
+    status: 0,
+  });
+};
+
+const isRecord = (value: unknown): value is WireRecord =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const requireRecord = (value: unknown, field: string): WireRecord =>
+  isRecord(value) ? value : malformed(field, value === undefined ? 'is missing' : 'must be an object');
+
+const requireRecordList = (value: unknown, field: string): WireRecord[] => {
+  if (!Array.isArray(value)) return malformed(field, value === undefined ? 'is missing' : 'must be an array');
+  return value.map((row, index) => requireRecord(row, `${field}[${index}]`));
+};
+
+const requireInteger = (value: unknown, field: string): number =>
+  typeof value === 'number' && Number.isInteger(value)
+    ? value
+    : malformed(field, value === undefined ? 'is missing' : 'must be an integer');
+
+/** The `data` object of a `{ success, data: { ... } }` answer. */
+export const toDataRecord = (raw: unknown): WireRecord =>
+  requireRecord(requireRecord(raw, 'body').data, 'data');
+
+/** The `data` array of a `{ success, data: [ ... ] }` answer. */
+export const toDataList = (raw: unknown): WireRecord[] =>
+  requireRecordList(requireRecord(raw, 'body').data, 'data');
+
+/** A required string that is passed through as sent. */
+export const toRequiredString = (value: unknown, field: string): string =>
+  typeof value === 'string' ? value : malformed(field, value === undefined ? 'is missing' : 'must be a string');
 
 export const toRecord = (value: unknown): WireRecord =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as WireRecord) : {};
@@ -87,9 +128,11 @@ export const toRecordOrNull = (value: unknown): WireRecord | null =>
 export const toRecordList = (value: unknown): WireRecord[] =>
   Array.isArray(value) ? value.map(toRecord) : [];
 
-/** Ids arrive as strings of digits or as numbers; the SDK exposes strings. */
-export const toId = (value: unknown): string =>
-  typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+/** A required id. Ids arrive as strings of digits or as numbers; the SDK exposes strings. */
+export const toId = (value: unknown, field = 'id'): string =>
+  typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : malformed(field, value === undefined ? 'is missing' : 'must be a string or number');
 
 export const toNullableId = (value: unknown): string | null =>
   typeof value === 'string' || typeof value === 'number' ? String(value) : null;
@@ -115,16 +158,20 @@ export const toStringList = (value: unknown): string[] =>
 
 /** Maps `{ page, limit, data: [...] }`; `page` and `limit` are the values the server used. */
 export const toPage = <T>(raw: unknown, mapRow: (row: WireRecord) => T): Page<T> => {
-  const body = toRecord(raw);
+  const body = requireRecord(raw, 'body');
+  const rows = requireRecordList(body.data, 'data');
   return {
-    page: toNumber(body.page),
-    limit: toNumber(body.limit),
-    data: toRecordList(body.data).map(mapRow),
+    page: requireInteger(body.page, 'page'),
+    limit: requireInteger(body.limit, 'limit'),
+    data: rows.map(mapRow),
   };
 };
 
 /** Maps `{ data: { id, deleted } }`. */
 export const toDeletedResource = (raw: unknown): DeletedResource => {
-  const data = toRecord(toRecord(raw).data);
-  return { id: toId(data.id), deleted: data.deleted === true };
+  const data = toDataRecord(raw);
+  if (typeof data.deleted !== 'boolean') {
+    return malformed('data.deleted', data.deleted === undefined ? 'is missing' : 'must be a boolean');
+  }
+  return { id: toId(data.id, 'data.id'), deleted: data.deleted };
 };

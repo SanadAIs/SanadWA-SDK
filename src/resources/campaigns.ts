@@ -21,9 +21,11 @@ import {
   toNullableId,
   toNullableString,
   toNumber,
+  toDataRecord,
   toPage,
   toRecord,
   toRecordOrNull,
+  toRequiredString,
   toStringList,
   toText,
   writeOptions,
@@ -63,7 +65,7 @@ const toCampaign = (row: WireRecord): Campaign => {
     startAt: toNullableString(row.start_at),
     createdAt: toNullableString(row.created_at),
     updatedAt: toNullableString(row.updated_at),
-    createdVia: row.created_via === 'api' ? 'api' : 'console',
+    createdVia: toRequiredString(row.created_via, 'created_via'),
     counts: {
       total: toNumber(counts.total),
       queued: toNumber(counts.queued),
@@ -78,7 +80,7 @@ const toCampaign = (row: WireRecord): Campaign => {
   };
 };
 
-const toCampaignFromEnvelope = (raw: unknown): Campaign => toCampaign(toRecord(toRecord(raw).data));
+const toCampaignFromEnvelope = (raw: unknown): Campaign => toCampaign(toDataRecord(raw));
 
 /** The API forbids `value` unless the source is `custom`, so an unset one is left out. */
 const toVariableWire = (variable: CampaignTemplateVariable): Record<string, unknown> => {

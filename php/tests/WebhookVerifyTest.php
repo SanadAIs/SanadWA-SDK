@@ -611,6 +611,106 @@ final class WebhookVerifyTest extends TestCase
         yield 'null' => [null];
     }
 
+    public function testNullFixtureOverridesReachTheBodyAndTheExpectedEvent(): void
+    {
+        foreach ([
+            TestFixtures::createMessageDeliveredFixture(['providerMsgId' => null, 'toPhone' => null]),
+            TestFixtures::createMessageReadFixture(['providerMsgId' => null, 'toPhone' => null]),
+            TestFixtures::createMessageFailedFixture(['providerMsgId' => null, 'toPhone' => null]),
+        ] as $fixture) {
+            $data = json_decode($fixture['rawBody'], true, 512, JSON_THROW_ON_ERROR)['data'];
+            self::assertArrayHasKey('provider_msg_id', $data);
+            self::assertNull($data['provider_msg_id']);
+            self::assertArrayHasKey('to_phone', $data);
+            self::assertNull($data['to_phone']);
+
+            $result = Webhooks::verify($fixture['rawBody'], $fixture['signature'], $fixture['secret']);
+            self::assertTrue($result->valid);
+            self::assertNull($result->event?->data['providerMsgId']);
+            self::assertNull($result->event?->data['toPhone']);
+            self::assertEquals($fixture['expectedEvent'], $result->event);
+        }
+    }
+
+    public function testFailedFixtureDerivesDetailsAndErrorUserMsgFromErrorData(): void
+    {
+        $fixture = TestFixtures::createMessageFailedFixture([
+            'errorData' => ['details' => 'X', 'error_user_msg' => 'Y'],
+        ]);
+        $error = json_decode($fixture['rawBody'], true, 512, JSON_THROW_ON_ERROR)['data']['error'];
+
+        self::assertSame('X', $error['details']);
+        self::assertSame('Y', $error['error_user_msg']);
+        self::assertSame(['details' => 'X', 'error_user_msg' => 'Y'], $error['error_data']);
+
+        $result = Webhooks::verify($fixture['rawBody'], $fixture['signature'], $fixture['secret']);
+        self::assertEquals($fixture['expectedEvent'], $result->event);
+        self::assertSame('X', $result->event?->data['error']->details);
+        self::assertSame('Y', $result->event?->data['error']->errorUserMsg);
+    }
+
+    public function testFailedFixtureWithNullErrorDataHasNullDetails(): void
+    {
+        $fixture = TestFixtures::createMessageFailedFixture(['errorData' => null]);
+        $error = json_decode($fixture['rawBody'], true, 512, JSON_THROW_ON_ERROR)['data']['error'];
+
+        self::assertNull($error['error_data']);
+        self::assertNull($error['details']);
+        self::assertNull($error['error_user_msg']);
+    }
+
+    public function testFailedFixtureExplicitDetailsWinOverErrorData(): void
+    {
+        $fixture = TestFixtures::createMessageFailedFixture([
+            'errorData' => ['details' => 'X', 'error_user_msg' => 'Y'],
+            'details' => null,
+            'errorUserMsg' => 'Z',
+        ]);
+        $error = json_decode($fixture['rawBody'], true, 512, JSON_THROW_ON_ERROR)['data']['error'];
+
+        self::assertNull($error['details']);
+        self::assertSame('Z', $error['error_user_msg']);
+    }
+
+    public function testNonObjectDataFallsBackToLegacyPayload(): void
+    {
+        $body = json_encode([
+            'event' => 'message.delivered',
+            'data' => 'x',
+            'payload' => [
+                'message_id' => '4242',
+                'provider_msg_id' => 'wamid.FAKE_DELIVERED_0001',
+                'to_phone' => '+966500000000',
+                'delivered_at' => '2026-11-21T10:00:00.000Z',
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $result = Webhooks::verify($body, self::sign($body), 'secret');
+
+        self::assertTrue($result->valid);
+        self::assertTrue($result->recognized);
+        self::assertSame('message.delivered', $result->event?->type);
+        self::assertSame('4242', $result->event?->data['messageId']);
+    }
+
+    public function testEmptyBareStringFailedErrorGivesNullMessage(): void
+    {
+        $body = json_encode([
+            'event' => 'message.failed',
+            'tenant_id' => 1,
+            'data' => [
+                'message_id' => '4244',
+                'failed_at' => '2026-11-21T10:02:00.000Z',
+                'error' => '',
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        $result = Webhooks::verify($body, self::sign($body), 'secret');
+
+        self::assertSame('message.failed', $result->event?->type);
+        self::assertNull($result->event?->data['error']->message);
+    }
+
     public function testLegacyEnvelopeAndBareStringFailedError(): void
     {
         $body = json_encode([

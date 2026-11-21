@@ -101,8 +101,8 @@ const sdk = new SanadWhatsApp({
 | ----------- | ----------------------------- | ------------------------------------------------------------------ |
 | `apiKey`    | required                      | Your API key. The constructor throws when it is empty.             |
 | `baseUrl`   | `https://api.sanadwa.com/v1`  | See "Base URL" below.                                              |
-| `retries`   | `5`                           | Total attempts, including the first. Minimum 1.                    |
-| `timeoutMs` | `30000`                       | Timeout for each attempt, in milliseconds. `0` disables it.        |
+| `retries`   | `5`                           | Total attempts, including the first. Minimum 1; a fraction is rounded down. The constructor throws for a value that is not a finite number. |
+| `timeoutMs` | `30000`                       | Timeout for each attempt, in milliseconds. `0` disables it. A fraction is rounded up. The constructor throws for a negative or non-finite value. |
 | `fetch`     | `globalThis.fetch`            | Pass your own `fetch` for tests.                                   |
 | `userAgent` | `@sanadwa/whatsapp-sdk/0.4.0` | Sent as the `User-Agent` header.                                   |
 
@@ -149,7 +149,7 @@ for (const n of numbers) {
 | Option          | Notes                                                                               |
 | --------------- | ----------------------------------------------------------------------------------- |
 | `page`, `limit` | See [Pagination](#pagination).                                                      |
-| `q`             | Search text matched against the template name.                                      |
+| `q`             | Text contained in the template name or language code, without regard to case.       |
 | `phoneNumberId` | Only the templates this number can send. An unknown id throws `NotFoundError` (`phone_not_found`). Wins over `wabaId`. |
 | `wabaId`        | Only the templates of this WhatsApp Business Account.                               |
 
@@ -286,7 +286,7 @@ for (const c of page.data) {
 ```ts
 const result = await sdk.contacts.upsert([
   { phone: '+966500000000', firstName: 'Alice', tags: ['vip'] },
-  { phone: '+966500000001', firstName: 'Omar', lastName: 'Haddad' },
+  { phone: '+12025550123', firstName: 'Omar', lastName: 'Haddad' },
 ]);
 
 console.log(result.summary); // { created, updated, rejected, failed }
@@ -325,11 +325,28 @@ for (const e of imported.errors) {
   file path.
 - The file needs a header row with a `phone` column. `first_name`, `last_name`, `email` and `tags`
   are optional columns.
-- Limits: 5 MB and 5000 rows. A larger file throws `ValidationError` (`import_file_too_large`)
-  before any request is made.
+- Limits: 5 MB and 5000 rows. A file over 5 MB throws `ValidationError`
+  (`import_file_too_large`) before any request is made. The SDK does not count rows: for more
+  than 5000 rows the API answers `400 import_too_many_rows` (`ValidationError`) and saves
+  nothing.
 - `tags` is applied to every row. The names must exist and cannot contain a comma.
 - The call succeeds even when rows are rejected. Read `errors`. `row` is the CSV line number; the
   header is line 1.
+- **A large import is slow.** The API answers only when every row is handled. Each attempt of
+  `import()` therefore gets at least 300 s, not the client's 30 s (a longer client `timeoutMs`,
+  or `0`, is kept). Pass `timeoutMs` in the input to set another value for this call.
+- For a large file pass your own `idempotencyKey`. If an attempt still times out, the import
+  keeps running on the server. The SDK's retries with the same key are then answered
+  `409 idempotency_in_progress`, and the call ends with `RateLimitedError`. Call `import()` again
+  later with the same key, file and `tags`: once the first run is finished you get its result,
+  and nothing is imported twice.
+
+```ts
+import { randomUUID } from 'node:crypto';
+
+const idempotencyKey = randomUUID(); // store it: you need it to ask again
+const imported = await sdk.contacts.import({ file: csv, idempotencyKey, timeoutMs: 600_000 });
+```
 
 **Delete**
 
@@ -356,8 +373,9 @@ A contact that opted out cannot be deleted: the API answers `409 contact_opted_o
 ```ts
 import { randomUUID } from 'node:crypto';
 
-// Store this key with your own record of the campaign BEFORE the call.
+// Store this key AND the exact input with your own record of the campaign BEFORE the call.
 const idempotencyKey = randomUUID();
+const sendAt = '2026-12-01T09:00:00.000Z'; // a fixed time, not one computed from the clock
 
 const { campaign, replayed } = await sdk.campaigns.create({
   name: 'November offer',
@@ -368,7 +386,7 @@ const { campaign, replayed } = await sdk.campaigns.create({
     { index: 1, source: 'contact.first_name' },
     { index: 2, source: 'custom', value: '20%' },
   ],
-  sendAt: new Date(Date.now() + 60 * 60 * 1000),
+  sendAt,
   idempotencyKey,
 });
 console.log(campaign.id, campaign.status, replayed);
@@ -379,6 +397,9 @@ console.log(campaign.id, campaign.status, replayed);
   retry: the API then returns the first campaign with `replayed: true` instead of creating, and
   charging for, a second one. A missing key throws `ValidationError`
   (`idempotency_key_required`) before any request is made.
+- **A retry must send the same input, including `sendAt`.** The same key with any different field
+  answers `409 idempotency_conflict` (`ValidationError`) and creates nothing. A `sendAt` computed
+  again from the clock (`Date.now() + …`) is a different value: store the time you sent.
 - `template.language` is required. There is no default language for campaigns.
 - `audience.tags` is 1 to 20 tag names.
 - `templateVariables[].source` is `contact.first_name`, `contact.last_name`, `contact.phone`,
@@ -485,6 +506,13 @@ for (let page = 1; ; page++) {
   (`invalid_idempotency_key`) before any request is made.
 - Reusing a key with a different request body answers `409 idempotency_conflict`
   (`ValidationError`).
+- **A key you pass must be unique per action, not per campaign, contact or tag.** For 24 hours
+  the same key on the same call returns the first answer again and does not run the action. This
+  matters most for calls without a body. Example: `campaigns.pause(id, { idempotencyKey: 'K' })`,
+  then `resume(id)`, then `pause(id, { idempotencyKey: 'K' })` returns the stored "paused" answer
+  while the campaign keeps sending. Only `messages.send()`, `messages.sendText()` and
+  `campaigns.create()` report a repeat (`replayed`); the other methods do not. When in doubt,
+  pass no key and let the SDK generate one.
 
 ```ts
 const sent = await sdk.messages.send({
@@ -517,17 +545,26 @@ matching row decides the class.
 | No response: network failure                         | `ServerError`, code `network_error`, status `0` | yes      |
 | No response: the attempt timed out                   | `ServerError`, code `timeout`, status `0`       | yes      |
 | Refused by the SDK before any request                | `ValidationError`, status `0`      | no                    |
+| A success answer the SDK cannot read                 | `SanadApiError`, code `malformed_response` | no            |
 
 Every error has `code`, `status`, `message`, `requestId`, `messageAr`, `details`, `upstreamCode`
 and `rawBody` (the decoded error body).
 
 Several codes share one class. **Branch on `code`, not only on the class.**
 
-**`SendFailedError`** means WhatsApp refused or failed the send.
+**`malformed_response`** means the API answered 2xx but the SDK could not read the answer: the
+body is not JSON (`status` is the HTTP status), or a part every answer must have is missing
+(`status` is `0`): the `data` object or array, `page`, `limit`, a row's id, `deleted`,
+`billing_type` or `created_via`. It is not retried. For a write, the action may have run. The
+API does not send such answers today.
+
+**`SendFailedError`** means WhatsApp refused or failed the send, or the result of the send is not
+known. See [Retries and timeouts](#retries-and-timeouts) for what to do with each status.
 
 - `upstreamStatus` is the HTTP status of the answer (same as `status`). It is normally WhatsApp's
-  own status, or 500 when WhatsApp gave none. It is the API's own 409 or 503 when the API refused
-  to repeat a send whose result is still unknown.
+  own status, or 500 when WhatsApp gave none. It is the API's own 409 when you repeat a send
+  whose result is still unknown, and the API's own 503 when WhatsApp accepted a send but returned
+  no message id (this 503 can be the first answer).
 - **A 401 or 403 `SendFailedError` is not about your API key.** It is WhatsApp's status.
 - `upstreamCode` is WhatsApp's error code as a string, or `null`.
 - `metaError` is WhatsApp's error object as sent (`title`, `message`, `code`, `subcode`, `type`,
@@ -543,9 +580,15 @@ Several codes share one class. **Branch on `code`, not only on the class.**
 
 It is thrown only after the automatic retries are used up.
 
-**402 errors** are the base `SanadApiError`. Codes: `PREPAID_CREDIT_CAP_REACHED`,
-`insufficient_credits`, `subscription_lapsed` and `PREPAID_CAP_CHECK_FAILED`.
-`PREPAID_CAP_CHECK_FAILED` means the balance could not be read. It does not mean the credits ran
+**402 errors** are the base `SanadApiError`. The code depends on the endpoint:
+
+| Endpoint                                   | Codes                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------- |
+| `messages.send()`, `messages.sendText()`   | `PREPAID_CREDIT_CAP_REACHED`, `SUBSCRIPTION_LAPSED`, `PREPAID_CAP_CHECK_FAILED` (upper case) |
+| `campaigns.create()`, `campaigns.resume()` | `insufficient_credits`, `subscription_lapsed` (lower case)             |
+
+Compare the code exactly: `SUBSCRIPTION_LAPSED` on a send and `subscription_lapsed` on a campaign
+are the same condition with two spellings. `PREPAID_CAP_CHECK_FAILED` means the balance could not be read. It does not mean the credits ran
 out, although the API message says "Not enough credits". The SDK does not retry a 402. It is safe
 to make the same call again after a few seconds with the same idempotency key.
 
@@ -622,19 +665,45 @@ try {
 | After the last attempt  | The error of the last answer is thrown.                                      |
 | Applies to              | Every method. Writes reuse the same `Idempotency-Key` on each attempt.       |
 
-**`send_failed` is never retried.** After a WhatsApp failure the API marks the send as uncertain.
-A repeat with the same key is answered `409 send_failed`, and the original WhatsApp error would
-be lost. So the first error goes straight to your code. Decide there whether to send again; use a
-new idempotency key if you do.
+**`send_failed` is never retried.** The first error goes straight to your code. What to do next
+depends on its `status`:
+
+- **A 4xx other than 408 and 429** (or `upstreamCode` `130429` with any status): WhatsApp refused
+  the message and nothing was sent. Fix the cause, then send again.
+- **A 5xx, 408 or 429, or the API's own 409 or 503: the result is not known.** The message may
+  already be on its way. **Do not send it again with a new idempotency key**: a new key removes
+  the guard against a duplicate, and the customer can get the message twice. Wait for the
+  `message.delivered` or `message.failed` webhook, or check the message in the SanadWA console.
+  A failed send returns no message id, so `messages.get()` cannot be used here. A repeat with the same key is safe: it is answered `409 send_failed` and
+  sends nothing.
+
+The 503 can be the first answer to a send, when WhatsApp accepted the request but returned no
+message id. See
+[When the result of a send is not known](https://developers.sanadwa.com/idempotency/#when-the-result-of-a-send-is-not-known).
+
+One narrow case: when the answer of a failed send is cut off before its body arrives, the SDK
+cannot see the code `send_failed`. It retries with the same key, and you may get the repeat's
+`409 send_failed` without WhatsApp's reason. Nothing is sent twice.
 
 `RateLimitedError.retryAfterSec` keeps the server's raw value even when the wait was capped.
 
 **Timeouts.** Each attempt has its own timeout, `timeoutMs` (default 30000 ms). It covers the
 request and the reading of the response body. A timed-out attempt is retried like a network
 failure. If the last attempt times out, the SDK throws `ServerError` with code `timeout`. Pass
-`timeoutMs: 0` to disable the timeout. With the defaults (5 attempts of up to
-30 s each, plus the waits) one call can take about two and a half minutes before it fails. Lower
-`retries` or `timeoutMs` if that is too long.
+`timeoutMs: 0` to disable the timeout. `contacts.import()` gets at least 300 s per attempt; see
+[Contacts](#contacts).
+
+**A write that outlasts its timeout.** The timeout stops the SDK from waiting. It does not stop
+the API. When the first attempt of a write times out while the API is still working, the retries
+with the same key are answered `409 idempotency_in_progress`, and the call ends with
+`RateLimitedError` (code `idempotency_in_progress`), not with `timeout`. The action may still
+complete. Calling again with the same idempotency key returns its result once it is finished.
+
+**How long one call can take.** With the defaults (5 attempts of up to 30 s each, plus the
+waits) one call can take about two and a half minutes when every attempt times out. It can take
+up to about six and a half minutes when the server asks for 60-second waits with `Retry-After`,
+as it does on some 503 answers for campaigns. Lower `retries` or `timeoutMs` if that is too
+long.
 
 ## Webhooks
 
@@ -823,6 +892,7 @@ All shipped fixtures:
 | Fixture                                        | Event                                           | Overrides                                              |
 | ---------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------ |
 | `__testFixtures.createMessageSentFixture()`      | `message.sent` (template)                       | `messageId`, `toPhone`, `templateName`, `templateLanguage`, `sentAt`, `secret` |
+| `__testFixtures.createTextMessageSentFixture()`  | `message.sent` (text)                           | `messageId`, `toPhone`, `text`, `sentAt`, `secret`     |
 | `__testFixtures.createMessageDeliveredFixture()` | `message.delivered`                             | `messageId`, `deliveredAt`, `providerMsgId`, `toPhone`, `secret` |
 | `__testFixtures.createMessageReadFixture()`      | `message.read`                                  | `messageId`, `readAt`, `providerMsgId`, `toPhone`, `secret` |
 | `__testFixtures.createMessageFailedFixture()`    | `message.failed` with the six-field error       | `messageId`, `failedAt`, `errorCode`, `errorTitle`, `errorMessage`, `errorData`, `details`, `errorUserMsg`, `providerMsgId`, `toPhone`, `secret` |
@@ -830,8 +900,10 @@ All shipped fixtures:
 | `__testFixtures.createTestEventFixture()`        | `test` (the console test event)                 | `secret`                                               |
 | `__testFixtures.createUnknownEventFixture()`     | `unknown` (default name `campaign.completed`)   | `eventType`, `data`, `secret`                          |
 
-The `__` prefix marks a testing surface. Do not use the fixtures in production code. The PHP SDK
-also has a text variant of the sent fixture.
+`providerMsgId` and `toPhone` accept `null`. On the failed fixture, `details` and `errorUserMsg`
+default to the values in `errorData`.
+
+The `__` prefix marks a testing surface. Do not use the fixtures in production code.
 
 ## Upgrading from 0.3.0
 
@@ -844,7 +916,9 @@ These changes can affect existing code. The full list is in [CHANGELOG.md](CHANG
 | Signed delivery the SDK cannot type | `valid: false`, `reason: 'unknown_event_type'` | `valid: true`, `recognized: false`, event `unknown`. Answer 401 only when `valid` is false. |
 | Console test event | Rejected as invalid | `valid: true`, event `test` |
 | `WebhookEvent` union | 5 members | 7 members: add `test` and `unknown` to an exhaustive `switch` |
-| Verify result | `{ valid, event }` | Also `signatureValid`, `recognized`, `eventType`, `envelope`. Use `toMatchObject` in tests. |
+| Verify result | `{ valid, event }` or `{ valid, reason }` | A valid result also has `signatureValid`, `recognized`, `eventType`, `envelope`; an invalid one also has `signatureValid: false` and `recognized: false`. Use `toMatchObject` in tests. |
+| Signed body that is not JSON | `valid: false`, `reason: 'verification_error'` | `valid: true`, `recognized: false`, event `unknown`, `envelope: null` |
+| A 2xx answer that is not JSON | A plain `SyntaxError` | `SanadApiError`, code `malformed_response` |
 | Default base URL | `https://api.sanadwa.com/api/public/v1` | `https://api.sanadwa.com/v1`. The old one still works as `baseUrl`. |
 | `Retry-After` wait | Capped at 30 s | Capped at 60 s |
 | Request timeout | None | 30 s per attempt (`timeoutMs`) |

@@ -10,14 +10,22 @@ Added:
 - `templates.list()` accepts `phoneNumberId` and `wabaId`; `Template.wabaId`.
 - `SendFailedError` (`upstreamStatus`, `upstreamCode`, `metaError`).
 - `RateLimitedError.limit` and `.remaining` (from `X-RateLimit-Limit` / `X-RateLimit-Remaining`).
-- `timeoutMs` client option (default 30000 ms per attempt; `0` disables it).
+- `timeoutMs` client option (default 30000 ms per attempt; `0` disables it). A fraction is rounded
+  up, and a value above 2147483647 is lowered to that.
+- `contacts.import()` gets at least 300 s per attempt, because the API answers only when every row
+  is handled, and accepts its own `timeoutMs`.
 - Webhooks: `signatureValid`, `recognized`, `eventType`, `envelope` on the verify result; `test` and
   `unknown` events; `providerMsgId` and `toPhone` on delivered/read/failed events; `errorData`,
   `details`, `errorUserMsg` on the failed-event error; fixtures `createTestEventFixture` and
-  `createUnknownEventFixture`; `recognized` and `eventType` on every fixture.
+  `createUnknownEventFixture`; `createTextMessageSentFixture` (the text variant of `message.sent`);
+  `recognized` and `eventType` on every fixture.
 - Every write of the new resources sends an `Idempotency-Key`; `campaigns.create()` requires one
   from the caller.
 - The resource classes and their types are exported from the package entry.
+- The new resources throw `SanadApiError` with code `malformed_response` for a 2xx answer without
+  its required parts (`data`, `page`, `limit`, a row's id, `deleted`, `billing_type`,
+  `created_via`). An unknown `billing_type` or `created_via` value is passed through as sent.
+- `npm run typecheck` also type-checks the test files (`tsconfig.test.json`).
 - `package.json`: `repository`, `homepage` and `bugs` links; separate type declarations for
   `import` and `require`.
 
@@ -37,12 +45,22 @@ Changed (behaviour changes — read before upgrading):
 - `WebhookEvent` has two new members, `test` and `unknown`. An exhaustive `switch` needs both.
 - A valid verify result has four more fields. A `toEqual({ valid: true, event })` assertion on the
   whole result fails; use `toMatchObject`.
+- An invalid verify result also has `signatureValid: false` and `recognized: false`. A
+  `toEqual({ valid: false, reason })` assertion on the whole result fails; use `toMatchObject`.
+- A correctly signed body that is not JSON is now `valid: true` with an `unknown` event and
+  `envelope: null` (was `valid: false`, `reason: 'verification_error'`).
+- A 2xx answer whose body is not JSON now throws `SanadApiError` with code `malformed_response`
+  (was a plain `SyntaxError`).
+- `retries`: a fraction is rounded down, and the constructor throws for a value that is not a
+  finite number (`NaN` used to make every call fail without a request).
 - Default base URL is `https://api.sanadwa.com/v1`. The old
   `https://api.sanadwa.com/api/public/v1` still works when passed as `baseUrl`.
 - A server `Retry-After` is honoured up to 60 s (was 30 s); computed backoff is still capped at 30 s.
 - HTTP 422 now throws `ValidationError` (was the base `SanadApiError`).
-- Every attempt now has a 30 s timeout. A call that used to wait longer for an answer is now
-  retried, and ends with `ServerError` code `timeout`.
+- Every attempt now has a 30 s timeout (300 s for `contacts.import()`). A call that used to wait
+  longer for an answer is now retried, and ends with `ServerError` code `timeout`, or with
+  `RateLimitedError` code `idempotency_in_progress` when it is a write the API is still working
+  on.
 - Types: `Template.category`, `Message.status`, `Message.sentAt`, `Message.toPhone`,
   `Message.channel`, `Message.provider` and the `message.sent` event's `messageId` can be `null`.
 - Default user agent is `@sanadwa/whatsapp-sdk/0.4.0`.
@@ -50,11 +68,17 @@ Changed (behaviour changes — read before upgrading):
 Fixed:
 
 - Requests can no longer hang forever: every attempt has a timeout.
+- A fractional `timeoutMs`, or one above the platform maximum, no longer makes every call throw a
+  `RangeError`.
+- A signature header with the right number of characters but more bytes (non-ASCII) is reported
+  as `signature_length_mismatch` (was `verification_error`). It was and is rejected.
 - `Message.id` is always a string, also when the API sends a number.
 - The webhook test suite no longer imports a file from another repository (fixed signature vectors).
 - Removed two outdated package tarballs from the repository.
-- README: the install section leads with a command that works today, and the error and retry
-  sections match the code.
+- README: the install section leads with the GitHub release install and marks the registry
+  command "once published"; the error and retry sections match the code.
+- README: after a `send_failed` whose result is not known (5xx, 408, 429, or the API's own 409 or
+  503), do not send again with a new idempotency key. The earlier text advised a new key.
 
 ## 0.3.0 — 2026-07-21
 

@@ -241,6 +241,58 @@ describe('Custom retries config', () => {
   });
 });
 
+describe('retries option', () => {
+  it.each([
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a string', '5' as unknown as number],
+  ])('%s throws in the constructor', (_name, retries) => {
+    expect(() => new SanadWhatsApp({ apiKey: 'pk_test_fake_key', retries }))
+      .toThrow('SanadWhatsApp: `retries` must be a finite number.');
+  });
+});
+
+describe('a 2xx answer that is not JSON, through the client', () => {
+  it('health() and messages.send() throw SanadApiError malformed_response', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response('<html>ok</html>', { status: 200 })));
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', fetch: fetchImpl as unknown as typeof fetch });
+    await expect(sdk.health()).rejects.toMatchObject({ code: 'malformed_response', status: 200 });
+    const err = await sdk.messages.send({
+      phoneNumberId: 'PN_TEST',
+      toPhone: '+12025550123',
+      templateName: 'hello_world',
+    }).catch((e: unknown) => e);
+    expect(isSanadApiError(err)).toBe(true);
+    expect(err).toMatchObject({ code: 'malformed_response' });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('contacts.import timeout through the client', () => {
+  const importOk = () => mkResponse(200, {
+    success: true,
+    data: { summary: { rows: 1, created: 1, updated: 0, rejected: 0, failed: 0 }, errors: [] },
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('uses 300 s per attempt with the default client timeout, and 30 s for other calls', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(importOk()));
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', fetch: fetchImpl as unknown as typeof fetch });
+    await sdk.contacts.import({ file: 'phone\n+12025550123\n' });
+    expect(timeoutSpy).toHaveBeenLastCalledWith(300_000);
+  });
+
+  it('keeps timeoutMs: 0 as no timeout', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(importOk()));
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', timeoutMs: 0, fetch: fetchImpl as unknown as typeof fetch });
+    await sdk.contacts.import({ file: 'phone\n+12025550123\n' });
+    expect((fetchImpl.mock.calls[0]![1] as RequestInit).signal ?? undefined).toBeUndefined();
+  });
+});
+
 describe('timeoutMs option', () => {
   const okHealth = () => mkResponse(200, { success: true, tenant_id: 't', scope: 's', server_time: 'now' });
   const signalOf = (fetchImpl: ReturnType<typeof vi.fn>, call = 0): AbortSignal | undefined =>

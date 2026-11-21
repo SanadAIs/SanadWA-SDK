@@ -103,7 +103,10 @@ final class Webhooks
 
         $eventType = self::asString($envelope['event'] ?? null)
             ?? self::asString($envelope['event_type'] ?? null);
-        $rawData = $envelope['data'] ?? $envelope['payload'] ?? null;
+        // Legacy `payload` is used whenever `data` is not an object, as in the TypeScript SDK.
+        $rawData = self::isJsonObject($envelope['data'] ?? null)
+            ? $envelope['data']
+            : ($envelope['payload'] ?? null);
         if (!self::isJsonObject($rawData)) {
             return self::unknownResult($eventType, $envelope, []);
         }
@@ -322,10 +325,8 @@ final class Webhooks
                 errorUserMsg: self::asString($raw['error_user_msg'] ?? null),
             );
         }
-        if (is_string($raw)) {
-            return new WebhookFailedError(null, null, $raw);
-        }
 
-        return new WebhookFailedError(null, null, null);
+        // A bare string (legacy) is surfaced as `message`; an empty one is null.
+        return new WebhookFailedError(null, null, self::asString($raw));
     }
 }

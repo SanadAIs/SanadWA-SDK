@@ -245,10 +245,12 @@ export const verifyWebhook = (input: WebhookVerifyInput): WebhookVerifyResult =>
 
     const expected = createHmac('sha256', secret).update(bodyBuf).digest('hex');
 
-    if (provided.length !== expected.length) return invalid('signature_length_mismatch');
-    if (!timingSafeEqual(Buffer.from(provided, 'utf8'), Buffer.from(expected, 'utf8'))) {
-      return invalid('signature_mismatch');
-    }
+    // Compare byte lengths: a non-ASCII header can have the same number of
+    // characters as the digest and still be longer in bytes.
+    const providedBuf = Buffer.from(provided, 'utf8');
+    const expectedBuf = Buffer.from(expected, 'utf8');
+    if (providedBuf.length !== expectedBuf.length) return invalid('signature_length_mismatch');
+    if (!timingSafeEqual(providedBuf, expectedBuf)) return invalid('signature_mismatch');
 
     // Signature OK: from here on the result is always valid.
     let envelope: unknown = null;

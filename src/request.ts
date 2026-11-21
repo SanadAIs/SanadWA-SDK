@@ -9,6 +9,7 @@
  *   409 other, 422 → ValidationError · 429 → RateLimitedError (retried)
  *   5xx → ServerError (retried) · anything else → SanadApiError
  *   no response → ServerError `network_error` / `timeout`, status 0 (retried)
+ *   2xx whose body is not JSON → SanadApiError `malformed_response` (not retried)
  */
 
 import {
@@ -23,6 +24,13 @@ import {
 
 /** Default per-attempt timeout. */
 export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * Largest timeout the SDK sets (about 24.8 days). `AbortSignal.timeout()`
+ * refuses a value above 4294967295, and Node fires a timer above this signed
+ * 32-bit maximum after 1 ms.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const MAX_COMPUTED_BACKOFF_MS = 30_000;
 const MAX_RETRY_AFTER_MS = 60_000;
@@ -51,6 +59,16 @@ export interface RequestOptions {
   idempotent?: boolean;
   /** Exact caller-supplied header value; a UUID is generated when omitted. */
   idempotencyKey?: string;
+  /**
+   * Per-attempt timeout for this call in milliseconds, in place of the
+   * client's. `0` disables it.
+   */
+  timeoutMs?: number;
+  /**
+   * Lower bound for this call's per-attempt timeout: the client's timeout is
+   * used when it is longer or disabled. Ignored when `timeoutMs` is set.
+   */
+  minTimeoutMs?: number;
   /** Callback invoked once per attempt with the final (non-retried) response headers. */
   onHeaders?: (headers: Headers) => void;
 }
@@ -215,10 +233,27 @@ const buildUrl = (
   return url;
 };
 
+/**
+ * Total attempts for a `retries` value: fractions are rounded down, the
+ * minimum is 1, and a value that is not a finite number means 1.
+ */
+export const normalizeAttempts = (retries: number): number =>
+  typeof retries === 'number' && Number.isFinite(retries) ? Math.max(1, Math.floor(retries)) : 1;
+
+/**
+ * A timeout `AbortSignal.timeout()` accepts: a whole number of milliseconds
+ * (fractions are rounded up) of at most 2147483647. `0` (no timeout) for a
+ * value that is not a positive finite number.
+ */
+export const normalizeTimeoutMs = (timeoutMs: number): number =>
+  typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.min(MAX_TIMEOUT_MS, Math.ceil(timeoutMs))
+    : 0;
+
 export const createRequester = (opts: CreateRequesterOptions): Requester => {
   const { apiKey, baseUrl, retries, fetchImpl, userAgent } = opts;
-  const maxAttempts = Math.max(1, retries);
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxAttempts = normalizeAttempts(retries);
+  const clientTimeoutMs = normalizeTimeoutMs(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   return async <T>(reqOpts: RequestOptions): Promise<T> => {
     if (reqOpts.body !== undefined && reqOpts.formData !== undefined) {
@@ -230,6 +265,13 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
       : null;
 
     const url = buildUrl(baseUrl, reqOpts.path, reqOpts.query);
+
+    let timeoutMs = clientTimeoutMs;
+    if (reqOpts.timeoutMs !== undefined) {
+      timeoutMs = normalizeTimeoutMs(reqOpts.timeoutMs);
+    } else if (reqOpts.minTimeoutMs !== undefined && clientTimeoutMs > 0) {
+      timeoutMs = Math.max(clientTimeoutMs, normalizeTimeoutMs(reqOpts.minTimeoutMs));
+    }
 
     let lastError: SanadApiError | null = null;
 
@@ -282,7 +324,17 @@ export const createRequester = (opts: CreateRequesterOptions): Requester => {
         if (reqOpts.onHeaders) reqOpts.onHeaders(res.headers);
         // 204 / empty body → return undefined cast as T.
         if (successText.length === 0) return undefined as T;
-        return JSON.parse(successText) as T;
+        try {
+          return JSON.parse(successText) as T;
+        } catch (err) {
+          throw new SanadApiError({
+            message: 'Malformed response: field `body` contains invalid JSON.',
+            code: 'malformed_response',
+            status: res.status,
+            requestId,
+            cause: err,
+          });
+        }
       }
 
       let bodyJson: ErrorBody = {};

@@ -295,7 +295,7 @@ describe('campaigns.get', () => {
   });
 
   it('maps missing keys the same way as nulls', async () => {
-    const { req } = fakeRequester({ success: true, data: { id: '9003', name: 'Bare', status: 'draft' } });
+    const { req } = fakeRequester({ success: true, data: { id: '9003', name: 'Bare', status: 'draft', created_via: 'console' } });
     expect(await new CampaignsResource(req).get('9003')).toEqual({
       id: '9003',
       name: 'Bare',
@@ -403,5 +403,28 @@ describe.each(['pause', 'resume'] as const)('campaigns.%s', (action) => {
     const { [action]: change } = new CampaignsResource(req);
     await change('9001');
     expect(calls[0]!.path).toBe(`/campaigns/9001/${action}`);
+  });
+});
+
+describe('campaigns — answers the SDK cannot read', () => {
+  it('passes an unknown created_via through', async () => {
+    const { req } = fakeRequester({ success: true, data: { id: '9004', name: 'X', status: 'draft', created_via: 'import' } });
+    expect((await new CampaignsResource(req).get('9004')).createdVia).toBe('import');
+  });
+
+  it.each([
+    ['no data object', { success: true }],
+    ['no id', { success: true, data: { name: 'X', status: 'draft', created_via: 'api' } }],
+    ['no created_via', { success: true, data: { id: '9005', name: 'X', status: 'draft' } }],
+  ])('get: %s throws malformed_response', async (_name, body) => {
+    const { req } = fakeRequester(body);
+    await expect(new CampaignsResource(req).get('9005'))
+      .rejects.toMatchObject({ code: 'malformed_response', status: 0 });
+  });
+
+  it('list: a body without page, limit and data throws malformed_response', async () => {
+    const { req } = fakeRequester({ success: true });
+    await expect(new CampaignsResource(req).list())
+      .rejects.toMatchObject({ code: 'malformed_response', status: 0 });
   });
 });

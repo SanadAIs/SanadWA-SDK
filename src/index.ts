@@ -69,11 +69,15 @@ export class SanadWhatsApp {
     if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new Error('SanadWhatsApp: `timeoutMs` must be a non-negative finite number.');
     }
+    const retries = opts.retries ?? DEFAULT_RETRIES;
+    if (typeof retries !== 'number' || !Number.isFinite(retries)) {
+      throw new Error('SanadWhatsApp: `retries` must be a finite number.');
+    }
     const fetchImpl: typeof fetch = opts.fetch ?? globalThis.fetch.bind(globalThis);
     this.#req = createRequester({
       apiKey: opts.apiKey,
       baseUrl: opts.baseUrl ?? DEFAULT_BASE_URL,
-      retries: opts.retries ?? DEFAULT_RETRIES,
+      retries,
       fetchImpl,
       userAgent: opts.userAgent ?? DEFAULT_USER_AGENT,
       timeoutMs,

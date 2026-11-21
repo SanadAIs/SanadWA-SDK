@@ -1,6 +1,13 @@
 import type { Requester } from '../request.js';
 import type { CreditBalance } from '../resource-types.js';
-import { toNullableNumber, toNullableString, toNumber, toRecord } from './resource-helpers.js';
+import {
+  toDataRecord,
+  toNullableNumber,
+  toNullableString,
+  toNumber,
+  toRecord,
+  toRequiredString,
+} from './resource-helpers.js';
 
 export class BalanceResource {
   readonly #req: Requester;
@@ -17,10 +24,10 @@ export class BalanceResource {
    */
   readonly get = async (): Promise<CreditBalance> => {
     const raw = await this.#req<unknown>({ method: 'GET', path: '/balance' });
-    const data = toRecord(toRecord(raw).data);
+    const data = toDataRecord(raw);
     const usage = toRecord(data.usage_this_month);
     return {
-      billingType: data.billing_type === 'postpaid' ? 'postpaid' : 'prepaid',
+      billingType: toRequiredString(data.billing_type, 'data.billing_type'),
       availableCredits: toNullableNumber(data.available_credits),
       paidCreditsRemaining: toNullableNumber(data.paid_credits_remaining),
       freeCreditsRemaining: toNumber(data.free_credits_remaining),

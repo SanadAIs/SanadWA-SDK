@@ -22,6 +22,9 @@ Added:
 - Every write of the new resources sends an `Idempotency-Key`; `campaigns()->create()` requires one
   from the caller.
 - `composer.json`: `homepage` and `support` links.
+- `contacts()->import()` gets at least 300 s per attempt with the default Guzzle client
+  (`Config::IMPORT_MIN_TIMEOUT`), because the API answers only when every row is handled. A
+  client passed as `httpClient` keeps its own timeout.
 
 Changed (behaviour changes — read before upgrading):
 
@@ -52,8 +55,16 @@ Fixed:
 - `messages()->get()` no longer throws when status, to_phone, channel or provider is null, or when
   the id arrives as a number.
 - Set the SDK user agent to `@sanadwa/whatsapp-sdk-php/0.4.0`.
-- README: the install section leads with a command that works today, and the error and retry
-  sections match the code.
+- Webhooks: legacy `payload` is used whenever `data` is not an object (was: only when `data` was
+  null or absent), and an empty bare-string `error` gives a `null` message (was `''`). Both now
+  match the TypeScript SDK.
+- Fixtures: a `null` override for `providerMsgId` or `toPhone` is kept (was replaced by the
+  default), and the failed fixture takes `details` and `errorUserMsg` from `errorData` when they
+  are not overridden.
+- README: the install section leads with the Composer command for the GitHub repository and says
+  when it resolves; the error and retry sections match the code.
+- README: after a `send_failed` whose result is not known (5xx, 408, 429, or the API's own 409 or
+  503), do not send again with a new idempotency key. The earlier text advised a new key.
 
 ## 0.3.0
 

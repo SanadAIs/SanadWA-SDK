@@ -15,6 +15,13 @@ final class Config
      */
     public const DEFAULT_BASE_URL = 'https://api.sanadwa.com/v1';
 
+    /**
+     * Seconds one attempt of `contacts()->import()` gets at least with the default Guzzle
+     * client: the API answers only when every row is handled. A longer `timeout`, or `0`
+     * (no timeout), is kept.
+     */
+    public const IMPORT_MIN_TIMEOUT = 300.0;
+
     public function __construct(
         public readonly string $apiKey,
         public readonly string $baseUrl = self::DEFAULT_BASE_URL,

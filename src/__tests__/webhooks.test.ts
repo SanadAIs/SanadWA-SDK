@@ -186,6 +186,12 @@ describe('verifyWebhook — failure modes', () => {
     if (!result.valid) expect(result.reason).toBe('signature_length_mismatch');
   });
 
+  it('same character count but more bytes (non-ASCII) → signature_length_mismatch, not verification_error', () => {
+    const body = env('message.delivered', { message_id: 'm', delivered_at: 'now' });
+    const result = verifyWebhook({ rawBody: body, signature: `sha256=${'é'.repeat(64)}`, secret: SECRET });
+    expect(result).toMatchObject({ valid: false, reason: 'signature_length_mismatch' });
+  });
+
   it('empty secret → invalid_secret', () => {
     const result = verifyWebhook({ rawBody: 'x', signature: 'sha256=abc', secret: '' });
     expect(result.valid).toBe(false);

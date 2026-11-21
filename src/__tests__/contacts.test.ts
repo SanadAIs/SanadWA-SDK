@@ -386,4 +386,31 @@ describe('contacts.import', () => {
     const req = vi.fn(async () => { throw failure; }) as unknown as Requester;
     await expect(new ContactsResource(req).import({ file: CSV, tags: ['nope'] })).rejects.toBe(failure);
   });
+
+  it('asks for at least 300 s per attempt, because the API answers only when every row is handled', async () => {
+    const { req, calls } = fakeRequester(importOk);
+    await new ContactsResource(req).import({ file: CSV });
+    expect(calls[0]!.minTimeoutMs).toBe(300_000);
+    expect(calls[0]).not.toHaveProperty('timeoutMs');
+  });
+
+  it('passes the caller timeoutMs in place of the 300 s floor', async () => {
+    const { req, calls } = fakeRequester(importOk);
+    await new ContactsResource(req).import({ file: CSV, timeoutMs: 900_000 });
+    expect(calls[0]!.timeoutMs).toBe(900_000);
+    expect(calls[0]).not.toHaveProperty('minTimeoutMs');
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])('rejects timeoutMs %s before any HTTP', async (timeoutMs) => {
+    const { req, fn } = fakeRequester(importOk);
+    await expect(new ContactsResource(req).import({ file: CSV, timeoutMs }))
+      .rejects.toMatchObject({ code: 'invalid_timeout', status: 0 });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('throws malformed_response for an answer without data', async () => {
+    const { req } = fakeRequester({ success: true });
+    await expect(new ContactsResource(req).import({ file: CSV }))
+      .rejects.toMatchObject({ code: 'malformed_response', status: 0 });
+  });
 });

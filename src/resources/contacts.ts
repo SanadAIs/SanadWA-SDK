@@ -17,6 +17,7 @@ import type {
 import {
   idSegment,
   pageQuery,
+  toDataRecord,
   toDeletedResource,
   toId,
   toNullableString,
@@ -33,6 +34,8 @@ import {
 
 const CONTACTS_BATCH_MAX = 100;
 const IMPORT_MAX_BYTES = 5_242_880;
+/** The import answers only when every row is handled, so one attempt gets at least 5 minutes. */
+const IMPORT_MIN_TIMEOUT_MS = 300_000;
 const IMPORT_DEFAULT_FILENAME = 'contacts.csv';
 const CSV_CONTENT_TYPE = 'text/csv';
 
@@ -142,7 +145,7 @@ export class ContactsResource {
       body: { contacts: items.map(toContactWire) },
       ...write,
     });
-    const data = toRecord(toRecord(raw).data);
+    const data = toDataRecord(raw);
     const summary = toRecord(data.summary);
     return {
       summary: {
@@ -173,11 +176,31 @@ export class ContactsResource {
    * The file needs a header row with a `phone` column; `first_name`,
    * `last_name`, `email` and `tags` are optional. Limits: 5 MB and 5000 rows.
    *
+   * More than 5000 rows is refused by the API (400 `import_too_many_rows`).
+   *
    * The call succeeds even when rows are rejected. It does not throw for row
    * errors: read `errors`, where `row` is the CSV line (the header is line 1).
+   *
+   * The API answers only when every row is handled. Each attempt of this call
+   * gets at least 300 s (the client's `timeoutMs` when that is longer or `0`;
+   * `input.timeoutMs` overrides both). If an attempt still times out, the
+   * import keeps running on the server and the retries with the same key are
+   * answered 409 `idempotency_in_progress` (`RateLimitedError`): pass your own
+   * `idempotencyKey` and call again with it later to get the stored result.
    */
   readonly import = async (input: ImportContactsInput): Promise<ContactImportResult> => {
     const write = writeOptions(input.idempotencyKey);
+
+    if (
+      input.timeoutMs !== undefined
+      && (typeof input.timeoutMs !== 'number' || !Number.isFinite(input.timeoutMs) || input.timeoutMs < 0)
+    ) {
+      throw new ValidationError({
+        message: '`timeoutMs` must be a non-negative finite number.',
+        code: 'invalid_timeout',
+        status: 0,
+      });
+    }
 
     const tags = input.tags ?? [];
     if (tags.some((tag) => typeof tag !== 'string' || tag.includes(','))) {
@@ -208,9 +231,12 @@ export class ContactsResource {
       path: '/contacts/import',
       formData,
       ...write,
+      ...(input.timeoutMs !== undefined
+        ? { timeoutMs: input.timeoutMs }
+        : { minTimeoutMs: IMPORT_MIN_TIMEOUT_MS }),
     };
     const raw = await this.#req<unknown>(request);
-    const data = toRecord(toRecord(raw).data);
+    const data = toDataRecord(raw);
     const summary = toRecord(data.summary);
     return {
       summary: {

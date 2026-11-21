@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { BalanceResource } from '../resources/balance.js';
-import { ServerError } from '../errors.js';
+import { SanadApiError, ServerError } from '../errors.js';
 import type { Requester, RequestOptions } from '../request.js';
+
+const bareBalance = { success: true, data: { billing_type: 'prepaid' } };
 
 const fakeRequester = (response: unknown) => {
   const calls: RequestOptions[] = [];
@@ -14,7 +16,7 @@ const fakeRequester = (response: unknown) => {
 
 describe('balance.get', () => {
   it('GETs /balance with no query, no body and no Idempotency-Key', async () => {
-    const { req, calls } = fakeRequester({ success: true, data: {} });
+    const { req, calls } = fakeRequester(bareBalance);
     await new BalanceResource(req).get();
     expect(calls).toEqual([{ method: 'GET', path: '/balance' }]);
   });
@@ -129,9 +131,27 @@ describe('balance.get', () => {
   });
 
   it('works when detached', async () => {
-    const { req, calls } = fakeRequester({ success: true, data: {} });
+    const { req, calls } = fakeRequester(bareBalance);
     const { get } = new BalanceResource(req);
     await get();
     expect(calls[0]!.path).toBe('/balance');
+  });
+});
+
+describe('balance.get — answers the SDK cannot read', () => {
+  it('passes an unknown billing_type through', async () => {
+    const { req } = fakeRequester({ success: true, data: { billing_type: 'trial' } });
+    expect((await new BalanceResource(req).get()).billingType).toBe('trial');
+  });
+
+  it.each([
+    ['no data object', { success: true }, 'data'],
+    ['no billing_type', { success: true, data: {} }, 'data.billing_type'],
+  ])('%s throws malformed_response', async (_name, body, field) => {
+    const { req } = fakeRequester(body);
+    const err = await new BalanceResource(req).get().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SanadApiError);
+    expect(err).toMatchObject({ code: 'malformed_response', status: 0 });
+    expect((err as SanadApiError).message).toContain(`\`${field}\``);
   });
 });

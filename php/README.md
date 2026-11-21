@@ -109,7 +109,7 @@ $sdk = new SanadWhatsApp([
 | `apiKey`         | required                          | Your API key. The constructor throws when it is empty.       |
 | `baseUrl`        | `https://api.sanadwa.com/v1`      | See "Base URL" below.                                        |
 | `retries`        | `5`                               | Total attempts, including the first. Must be an integer.     |
-| `timeout`        | `30.0`                            | Seconds for one whole attempt. Used by the default client.   |
+| `timeout`        | `30.0`                            | Seconds for one whole attempt. Used by the default client. `contacts()->import()` gets at least 300 s. |
 | `connectTimeout` | `10.0`                            | Seconds to connect. Used by the default client.              |
 | `httpClient`     | `GuzzleHttp\Client`               | Any PSR-18 client. A client you pass is used as it is: `timeout` and `connectTimeout` do not apply to it. |
 | `userAgent`      | `@sanadwa/whatsapp-sdk-php/0.4.0` | Sent as the `User-Agent` header.                             |
@@ -216,7 +216,7 @@ returns one page of the account's approved templates.
 | Argument         | Notes                                                                              |
 | ---------------- | ---------------------------------------------------------------------------------- |
 | `page`, `limit`  | See [Pagination](#pagination).                                                     |
-| `q`              | Search text matched against the template name.                                     |
+| `q`              | Text contained in the template name or language code, without regard to case.      |
 | `phoneNumberId`  | Only the templates this number can send. An unknown id throws `NotFoundError` (`phone_not_found`). Wins over `wabaId`. |
 | `wabaId`         | Only the templates of this WhatsApp Business Account.                              |
 
@@ -376,7 +376,7 @@ use Sanadwa\WhatsApp\Dto\ContactInput;
 
 $result = $sdk->contacts()->upsert([
     new ContactInput(phone: '+966500000000', firstName: 'Alice', tags: ['vip']),
-    new ContactInput(phone: '+966500000001', firstName: 'Omar', lastName: 'Haddad'),
+    new ContactInput(phone: '+12025550123', firstName: 'Omar', lastName: 'Haddad'),
 ]);
 
 echo $result->summary->created, ' created, ', $result->summary->rejected, " rejected\n";
@@ -403,7 +403,7 @@ foreach ($result->results as $item) {
 ```php
 <?php
 
-$csv = "phone,first_name,tags\n+966500000000,Alice,vip\n+966500000001,Omar,\n";
+$csv = "phone,first_name,tags\n+966500000000,Alice,vip\n+12025550123,Omar,\n";
 // From a file: $csv = file_get_contents('/path/to/contacts.csv');
 
 $imported = $sdk->contacts()->import($csv, tags: ['vip'], filename: 'contacts.csv');
@@ -417,11 +417,30 @@ foreach ($imported->errors as $error) {
 - `$csv` is the CSV content, not a file path.
 - The CSV needs a header row with a `phone` column. `first_name`, `last_name`, `email` and `tags`
   are optional columns.
-- Limits: 5 MB and 5000 rows. Larger content throws `ValidationError` (`import_file_too_large`)
-  before any request is made.
+- Limits: 5 MB and 5000 rows. Content over 5 MB throws `ValidationError`
+  (`import_file_too_large`) before any request is made. The SDK does not count rows: for more
+  than 5000 rows the API answers `400 import_too_many_rows` (`ValidationError`) and saves
+  nothing.
 - `$tags` is applied to every row. The names must exist and cannot contain a comma.
 - The call succeeds even when rows are rejected. Read `errors`. `row` is the CSV line number; the
   header is line 1.
+- **A large import is slow.** The API answers only when every row is handled. With the default
+  Guzzle client each attempt of `import()` therefore gets at least 300 s
+  (`Config::IMPORT_MIN_TIMEOUT`), not the 30 s of other calls. A longer `timeout`, or `0`, is
+  kept. A client you pass as `httpClient` keeps its own timeout: give it at least 300 s if you
+  import large files.
+- For a large file pass your own `idempotencyKey`. If an attempt still times out, the import
+  keeps running on the server. The SDK's retries with the same key are then answered
+  `409 idempotency_in_progress`, and the call ends with `RateLimitedError`. Call `import()` again
+  later with the same key, content and `tags`: once the first run is finished you get its result,
+  and nothing is imported twice.
+
+```php
+<?php
+
+$idempotencyKey = bin2hex(random_bytes(16)); // store it: you need it to ask again
+$imported = $sdk->contacts()->import($csv, idempotencyKey: $idempotencyKey);
+```
 
 **Delete**
 
@@ -453,8 +472,10 @@ A contact that opted out cannot be deleted: the API answers `409 contact_opted_o
 use Sanadwa\WhatsApp\Dto\CampaignTemplateVariable;
 use Sanadwa\WhatsApp\Dto\CreateCampaignOptions;
 
-// Store this key with your own record of the campaign BEFORE the call.
+// Store this key AND the exact input with your own record of the campaign BEFORE the call.
 $idempotencyKey = bin2hex(random_bytes(16));
+// A fixed time, not one computed from the clock.
+$sendAt = new DateTimeImmutable('2026-12-01T09:00:00+00:00');
 
 $created = $sdk->campaigns()->create(new CreateCampaignOptions(
     name: 'November offer',
@@ -467,7 +488,7 @@ $created = $sdk->campaigns()->create(new CreateCampaignOptions(
         new CampaignTemplateVariable(index: 1, source: 'contact.first_name'),
         new CampaignTemplateVariable(index: 2, source: 'custom', value: '20%'),
     ],
-    sendAt: new DateTimeImmutable('+1 hour'),
+    sendAt: $sendAt,
 ));
 
 echo $created->campaign->id, ' ', $created->campaign->status, "\n";
@@ -479,6 +500,9 @@ var_dump($created->replayed);
   retry: the API then returns the first campaign with `replayed` set to `true` instead of
   creating, and charging for, a second one. An empty key throws `ValidationError`
   (`idempotency_key_required`) before any request is made.
+- **A retry must send the same input, including `sendAt`.** The same key with any different field
+  answers `409 idempotency_conflict` (`ValidationError`) and creates nothing. A `sendAt` computed
+  again from the clock (`'+1 hour'`) is a different value: store the time you sent.
 - `templateLanguage` is required. There is no default language for campaigns.
 - `audienceTags` is 1 to 20 tag names.
 - `CampaignTemplateVariable::$source` is `contact.first_name`, `contact.last_name`,
@@ -590,6 +614,13 @@ for ($page = 1; ; $page++) {
   (`invalid_idempotency_key`) before any request is made.
 - Reusing a key with a different request body answers `409 idempotency_conflict`
   (`ValidationError`).
+- **A key you pass must be unique per action, not per campaign, contact or tag.** For 24 hours
+  the same key on the same call returns the first answer again and does not run the action. This
+  matters most for calls without a body. Example: `campaigns()->pause($id, 'K')`, then
+  `resume($id)`, then `pause($id, 'K')` returns the stored "paused" answer while the campaign
+  keeps sending. Only `messages()->send()`, `messages()->sendText()` and `campaigns()->create()`
+  report a repeat (`replayed`); the other methods do not. When in doubt, pass no key and let the
+  SDK generate one.
 
 ```php
 <?php
@@ -636,11 +667,13 @@ Read the API error code from the `code` property: `$error->code`. PHP's own `get
 
 Several codes share one class. **Branch on `code`, not only on the class.**
 
-**`SendFailedError`** means WhatsApp refused or failed the send.
+**`SendFailedError`** means WhatsApp refused or failed the send, or the result of the send is not
+known. See [Retries and timeouts](#retries-and-timeouts) for what to do with each status.
 
 - `upstreamStatus` is the HTTP status of the answer (same as `status`). It is normally WhatsApp's
-  own status, or 500 when WhatsApp gave none. It is the API's own 409 or 503 when the API refused
-  to repeat a send whose result is still unknown.
+  own status, or 500 when WhatsApp gave none. It is the API's own 409 when you repeat a send
+  whose result is still unknown, and the API's own 503 when WhatsApp accepted a send but returned
+  no message id (this 503 can be the first answer).
 - **A 401 or 403 `SendFailedError` is not about your API key.** It is WhatsApp's status.
 - `upstreamCode` is WhatsApp's error code as a string, or `null`.
 - `metaError` is WhatsApp's error object as an array (`title`, `message`, `code`, `subcode`,
@@ -656,9 +689,15 @@ Several codes share one class. **Branch on `code`, not only on the class.**
 
 It is thrown only after the automatic retries are used up.
 
-**402 errors** are the base `SanadApiError`. Codes: `PREPAID_CREDIT_CAP_REACHED`,
-`insufficient_credits`, `subscription_lapsed` and `PREPAID_CAP_CHECK_FAILED`.
-`PREPAID_CAP_CHECK_FAILED` means the balance could not be read. It does not mean the credits ran
+**402 errors** are the base `SanadApiError`. The code depends on the endpoint:
+
+| Endpoint                                         | Codes                                                            |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `messages()->send()`, `messages()->sendText()`   | `PREPAID_CREDIT_CAP_REACHED`, `SUBSCRIPTION_LAPSED`, `PREPAID_CAP_CHECK_FAILED` (upper case) |
+| `campaigns()->create()`, `campaigns()->resume()` | `insufficient_credits`, `subscription_lapsed` (lower case)       |
+
+Compare the code exactly: `SUBSCRIPTION_LAPSED` on a send and `subscription_lapsed` on a campaign
+are the same condition with two spellings. `PREPAID_CAP_CHECK_FAILED` means the balance could not be read. It does not mean the credits ran
 out, although the API message says "Not enough credits". The SDK does not retry a 402. It is safe
 to make the same call again after a few seconds with the same idempotency key.
 
@@ -736,10 +775,25 @@ try {
 | After the last attempt  | The error of the last answer is thrown.                                      |
 | Applies to              | Every method. Writes reuse the same `Idempotency-Key` on each attempt.       |
 
-**`send_failed` is never retried.** After a WhatsApp failure the API marks the send as uncertain.
-A repeat with the same key is answered `409 send_failed`, and the original WhatsApp error would
-be lost. So the first error goes straight to your code. Decide there whether to send again; use a
-new idempotency key if you do.
+**`send_failed` is never retried.** The first error goes straight to your code. What to do next
+depends on its `status`:
+
+- **A 4xx other than 408 and 429** (or `upstreamCode` `130429` with any status): WhatsApp refused
+  the message and nothing was sent. Fix the cause, then send again.
+- **A 5xx, 408 or 429, or the API's own 409 or 503: the result is not known.** The message may
+  already be on its way. **Do not send it again with a new idempotency key**: a new key removes
+  the guard against a duplicate, and the customer can get the message twice. Wait for the
+  `message.delivered` or `message.failed` webhook, or check the message in the SanadWA console.
+  A failed send returns no message id, so `messages()->get()` cannot be used here. A repeat with
+  the same key is safe: it is answered `409 send_failed` and sends nothing.
+
+The 503 can be the first answer to a send, when WhatsApp accepted the request but returned no
+message id. See
+[When the result of a send is not known](https://developers.sanadwa.com/idempotency/#when-the-result-of-a-send-is-not-known).
+
+One narrow case: when the answer of a failed send is cut off before its body arrives, the SDK
+cannot see the code `send_failed`. It retries with the same key, and you may get the repeat's
+`409 send_failed` without WhatsApp's reason. Nothing is sent twice.
 
 `RateLimitedError::$retryAfterSec` keeps the server's raw value even when the wait was capped.
 
@@ -747,9 +801,19 @@ new idempotency key if you do.
 `connectTimeout` (10 s to connect). `0` disables either. A timed-out attempt is retried like a
 network failure. If the last attempt times out, the SDK throws `ServerError` with code `timeout`.
 The code is `timeout` only when Guzzle reports the timeout (curl error 28). With another PSR-18
-client the code is `network_error`; the retry behaviour is the same. With the defaults (5 attempts
-of up to 30 s each, plus the waits) one call can take about two and a half minutes before it
-fails. Lower `retries` or `timeout` if that is too long.
+client the code is `network_error`; the retry behaviour is the same. `contacts()->import()` gets
+at least 300 s per attempt with the default client; see [Contacts](#contacts).
+
+**A write that outlasts its timeout.** The timeout stops the SDK from waiting. It does not stop
+the API. When the first attempt of a write times out while the API is still working, the retries
+with the same key are answered `409 idempotency_in_progress`, and the call ends with
+`RateLimitedError` (code `idempotency_in_progress`), not with `timeout`. The action may still
+complete. Calling again with the same idempotency key returns its result once it is finished.
+
+**How long one call can take.** With the defaults (5 attempts of up to 30 s each, plus the
+waits) one call can take about two and a half minutes when every attempt times out. It can take
+up to about six and a half minutes when the server asks for 60-second waits with `Retry-After`,
+as it does on some 503 answers for campaigns. Lower `retries` or `timeout` if that is too long.
 
 ## Webhooks
 
@@ -982,6 +1046,9 @@ All shipped fixtures:
 | `TestFixtures::createInboundMessageFixture()`   | `inbound.message`                             | `from`, `text`, `messageType`, `messageId`, `timestamp`, `secret` |
 | `TestFixtures::createTestEventFixture()`        | `test` (the console test event)               | `secret`                                               |
 | `TestFixtures::createUnknownEventFixture()`     | `unknown` (default name `campaign.completed`) | `eventType`, `data`, `secret`                          |
+
+In the overrides, `providerMsgId` and `toPhone` accept `null`. On the failed fixture, `details`
+and `errorUserMsg` default to the values in `errorData`.
 
 Do not use the fixtures in production code.
 

@@ -13,8 +13,8 @@ import {
   toDeletedResource,
   toId,
   toNullableString,
+  toDataRecord,
   toPage,
-  toRecord,
   toText,
   writeOptions,
   type WireRecord,
@@ -61,7 +61,7 @@ export class TagsResource {
     if (input.description !== undefined) body.description = input.description;
 
     const raw = await this.#req<unknown>({ method: 'POST', path: '/tags', body, ...write });
-    return toTag(toRecord(toRecord(raw).data));
+    return toTag(toDataRecord(raw));
   };
 
   /**

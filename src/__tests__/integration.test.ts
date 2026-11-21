@@ -85,8 +85,10 @@ describe('new resources through the real client', () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('every resource reaches its endpoint with the client key and base URL', async () => {
-    const fetchImpl = vi.fn().mockImplementation(() =>
-      Promise.resolve(mkResponse(200, { success: true, page: 1, limit: 50, data: [] })));
+    const fetchImpl = vi.fn().mockImplementation((url: string) =>
+      Promise.resolve(mkResponse(200, url.endsWith('/balance')
+        ? { success: true, data: { billing_type: 'prepaid' } }
+        : { success: true, page: 1, limit: 50, data: [] })));
     const sdk = mkSdk(fetchImpl);
 
     await sdk.phoneNumbers.list();

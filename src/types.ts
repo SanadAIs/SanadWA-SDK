@@ -16,11 +16,17 @@ export interface ClientOptions {
    * used unchanged when passed here.
    */
   baseUrl?: string;
-  /** Total attempts including the first request (default: 5). */
+  /**
+   * Total attempts including the first request (default: 5). Fractions are
+   * rounded down and the minimum is 1; a value that is not a finite number
+   * is refused by the constructor.
+   */
   retries?: number;
   /**
    * Timeout for each attempt in milliseconds (default: 30000). A timed-out
    * attempt is retried like a network failure. `0` disables the timeout.
+   * Fractions are rounded up; a value above 2147483647
+   * (about 24.8 days) is lowered to that.
    */
   timeoutMs?: number;
   /** Inject a custom `fetch` implementation for testing. */
@@ -50,7 +56,7 @@ export interface ListTemplatesOptions {
   page?: number;
   /** Page size (default 50, maximum 200). */
   limit?: number;
-  /** Search text matched against the template name. */
+  /** Text contained in the template name or language code, without regard to case. */
   q?: string;
   /**
    * Only templates the given sender can use (a number can only send its own

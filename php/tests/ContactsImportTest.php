@@ -35,6 +35,23 @@ final class ContactsImportTest extends TestCase
         ],
     ];
 
+    public function testImportGoesThroughTheImportRequesterAndOtherCallsDoNot(): void
+    {
+        $general = new FakeHttpClient([
+            $this->json(200, ['success' => true, 'page' => 1, 'limit' => 50, 'data' => []]),
+        ]);
+        $slow = new FakeHttpClient([$this->json(200, self::EMPTY_RESULT)]);
+        $contacts = new Contacts($this->requester($general), $this->requester($slow));
+
+        $contacts->import(self::CSV);
+        $contacts->list();
+
+        self::assertCount(1, $slow->requests);
+        self::assertSame(self::BASE_URL . '/contacts/import', $this->url($slow->requests[0]));
+        self::assertCount(1, $general->requests);
+        self::assertSame(self::BASE_URL . '/contacts', $this->url($general->requests[0]));
+    }
+
     public function testImportSendsMultipartFileWithDefaultFilenameAndNoTagsPart(): void
     {
         $client = new FakeHttpClient([$this->json(200, self::EMPTY_RESULT)]);

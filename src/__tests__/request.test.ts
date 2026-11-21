@@ -4,6 +4,8 @@ import {
   parseRetryAfter,
   computeBackoff,
   isRetryable,
+  normalizeAttempts,
+  normalizeTimeoutMs,
 } from '../request.js';
 import {
   SanadApiError,
@@ -870,5 +872,150 @@ describe('createRequester — formData', () => {
     const out = await req({ method: 'DELETE', path: '/tags/42', idempotent: true });
     expect(out).toBeUndefined();
     expect((fetchImpl.mock.calls[0]![1] as RequestInit).method).toBe('DELETE');
+  });
+});
+
+// ---------- a 2xx answer that is not JSON ----------
+
+describe('2xx answer that is not JSON', () => {
+  it('throws SanadApiError malformed_response with the status and request id, without a retry', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response('<html>ok</html>', { status: 200, headers: { 'x-request-id': 'req_html' } })));
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const err = await req({ method: 'GET', path: '/health' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SanadApiError);
+    expect(err).toMatchObject({
+      code: 'malformed_response',
+      status: 200,
+      requestId: 'req_html',
+      message: 'Malformed response: field `body` contains invalid JSON.',
+    });
+    expect((err as Error).cause).toBeInstanceOf(SyntaxError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------- retries / timeout values ----------
+
+describe('normalizeAttempts', () => {
+  it('rounds fractions down, has a minimum of 1 and maps non-finite values to 1', () => {
+    expect(normalizeAttempts(5)).toBe(5);
+    expect(normalizeAttempts(2.5)).toBe(2);
+    expect(normalizeAttempts(0)).toBe(1);
+    expect(normalizeAttempts(-3)).toBe(1);
+    expect(normalizeAttempts(Number.NaN)).toBe(1);
+    expect(normalizeAttempts(Number.POSITIVE_INFINITY)).toBe(1);
+  });
+});
+
+describe('normalizeTimeoutMs', () => {
+  it('returns a value AbortSignal.timeout accepts', () => {
+    expect(normalizeTimeoutMs(1500)).toBe(1500);
+    expect(normalizeTimeoutMs(1500.5)).toBe(1501);
+    expect(normalizeTimeoutMs(0.2)).toBe(1);
+    expect(normalizeTimeoutMs(5e9)).toBe(2_147_483_647);
+    expect(normalizeTimeoutMs(0)).toBe(0);
+    expect(normalizeTimeoutMs(Number.NaN)).toBe(0);
+  });
+});
+
+describe('requester with unusual retries / timeoutMs values', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('retries: 2.5 makes 2 attempts and throws the error of the last answer', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.resolve(mkResponse(500, { code: 'internal_error' })));
+    const req = createRequester({ ...baseOpts, retries: 2.5, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/health' }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    expect(await p).toMatchObject({ code: 'internal_error', status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries: NaN still makes one request', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.resolve(mkResponse(500, { code: 'internal_error' })));
+    const req = createRequester({ ...baseOpts, retries: Number.NaN, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'GET', path: '/health' }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    expect(await p).toMatchObject({ code: 'internal_error', status: 500 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a fraction', 1500.5, 1501],
+    ['a value above the platform maximum', 5e9, 2_147_483_647],
+  ])('timeoutMs %s does not throw a RangeError', async (_name, timeoutMs, expected) => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(mkResponse(200, { ok: true })));
+    const req = createRequester({ ...baseOpts, retries: 1, timeoutMs, fetchImpl: fetchImpl as unknown as typeof fetch });
+    await expect(req({ method: 'GET', path: '/health' })).resolves.toEqual({ ok: true });
+    expect(timeoutSpy).toHaveBeenCalledWith(expected);
+  });
+});
+
+describe('per-request timeout', () => {
+  const run = async (clientTimeoutMs: number | undefined, reqTimeout: { timeoutMs?: number; minTimeoutMs?: number }) => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(mkResponse(200, { ok: true })));
+    const req = createRequester({
+      ...baseOpts,
+      retries: 1,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      ...(clientTimeoutMs !== undefined ? { timeoutMs: clientTimeoutMs } : {}),
+    });
+    await req({ method: 'POST', path: '/contacts/import', ...reqTimeout });
+    return { timeoutSpy, signal: (fetchImpl.mock.calls[0]![1] as RequestInit).signal ?? undefined };
+  };
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('minTimeoutMs raises a shorter client timeout', async () => {
+    const { timeoutSpy } = await run(undefined, { minTimeoutMs: 300_000 });
+    expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+  });
+
+  it('minTimeoutMs keeps a longer client timeout', async () => {
+    const { timeoutSpy } = await run(600_000, { minTimeoutMs: 300_000 });
+    expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+  });
+
+  it('minTimeoutMs keeps a disabled client timeout disabled', async () => {
+    const { timeoutSpy, signal } = await run(0, { minTimeoutMs: 300_000 });
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect(signal).toBeUndefined();
+  });
+
+  it('timeoutMs on the request replaces the client timeout', async () => {
+    const { timeoutSpy } = await run(30_000, { timeoutMs: 5_000 });
+    expect(timeoutSpy).toHaveBeenCalledWith(5_000);
+  });
+
+  it('timeoutMs: 0 on the request disables the timeout', async () => {
+    const { signal } = await run(30_000, { timeoutMs: 0 });
+    expect(signal).toBeUndefined();
+  });
+});
+
+describe('a slow write whose first attempt times out', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('ends as RateLimitedError idempotency_in_progress, with the same key on every attempt', async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new DOMException('The operation was aborted due to timeout', 'TimeoutError'))
+      .mockImplementation(() => Promise.resolve(
+        mkResponse(409, { code: 'idempotency_in_progress' }, { 'retry-after': '1' })));
+    const req = createRequester({ ...baseOpts, retries: 3, fetchImpl: fetchImpl as unknown as typeof fetch });
+    const p = req({ method: 'POST', path: '/contacts/import', idempotent: true }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const err = await p;
+    expect(err).toBeInstanceOf(RateLimitedError);
+    expect(err).toMatchObject({ code: 'idempotency_in_progress', status: 409 });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    const keys = fetchImpl.mock.calls.map((call) =>
+      ((call[1] as RequestInit).headers as Record<string, string>)['Idempotency-Key']);
+    expect(new Set(keys).size).toBe(1);
   });
 });
