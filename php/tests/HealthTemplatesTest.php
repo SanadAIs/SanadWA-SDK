@@ -30,7 +30,7 @@ final class HealthTemplatesTest extends TestCase
         self::assertSame('7', $health->tenantId);
         self::assertSame('messages:send templates:read', $health->scope);
         self::assertSame('2026-05-10T12:00:00.000Z', $health->serverTime);
-        self::assertSame('/api/public/v1/health', $client->requests[0]->getUri()->getPath());
+        self::assertSame('/v1/health', $client->requests[0]->getUri()->getPath());
         self::assertSame('', $client->requests[0]->getUri()->getQuery());
         self::assertFalse($client->requests[0]->hasHeader('Idempotency-Key'));
         self::assertFalse($client->requests[0]->hasHeader('Content-Type'));

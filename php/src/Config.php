@@ -9,7 +9,11 @@ use Psr\Http\Client\ClientInterface;
 
 final class Config
 {
-    public const DEFAULT_BASE_URL = 'https://api.sanadwa.com/api/public/v1';
+    /**
+     * Default API base URL. The older `https://api.sanadwa.com/api/public/v1` serves the same
+     * routes and is used unchanged when passed explicitly as `baseUrl`.
+     */
+    public const DEFAULT_BASE_URL = 'https://api.sanadwa.com/v1';
 
     public function __construct(
         public readonly string $apiKey,

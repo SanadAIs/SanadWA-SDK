@@ -51,14 +51,14 @@ final class MessagesSendTest extends TestCase
         $request = $client->requests[0];
         self::assertSame('POST', $request->getMethod());
         self::assertSame(
-            'https://api.sanadwa.com/api/public/v1/messages/template',
+            'https://api.sanadwa.com/v1/messages/template',
             (string) $request->getUri(),
         );
         self::assertSame('application/json', $request->getHeaderLine('Content-Type'));
         self::assertSame('Bearer pk_test', $request->getHeaderLine('Authorization'));
         self::assertSame('application/json', $request->getHeaderLine('Accept'));
         self::assertSame(
-            '@sanadwa/whatsapp-sdk-php/0.3.0',
+            '@sanadwa/whatsapp-sdk-php/0.4.0',
             $request->getHeaderLine('User-Agent'),
         );
         self::assertSame('caller-key-123', $request->getHeaderLine('Idempotency-Key'));
@@ -144,7 +144,7 @@ final class MessagesSendTest extends TestCase
         $request = $client->requests[0];
         self::assertSame('POST', $request->getMethod());
         self::assertSame(
-            'https://api.sanadwa.com/api/public/v1/messages/text',
+            'https://api.sanadwa.com/v1/messages/text',
             (string) $request->getUri(),
         );
         self::assertSame('reply-key-123', $request->getHeaderLine('Idempotency-Key'));
@@ -209,7 +209,7 @@ final class MessagesSendTest extends TestCase
         );
 
         self::assertSame('wamid.ALIAS', $response->messageId);
-        self::assertSame('/api/public/v1/messages/text', $client->requests[0]->getUri()->getPath());
+        self::assertSame('/v1/messages/text', $client->requests[0]->getUri()->getPath());
     }
 
     public function testSendTextRejectsInvalidIdempotencyKey(): void
