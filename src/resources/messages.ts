@@ -6,7 +6,7 @@ import type {
   SendTextReplyOptions,
   SendTextReplyResponse,
 } from '../types.js';
-import { ValidationError } from '../errors.js';
+import { assertIdempotencyKey, isIdempotentReplay } from './resource-helpers.js';
 
 interface SendWire {
   success: true;
@@ -38,31 +38,13 @@ interface MessageWire {
   };
 }
 
-const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7E]+$/;
-
-const validateIdempotencyKey = (idempotencyKey: string | undefined): void => {
-  if (
-    idempotencyKey !== undefined
-    && (typeof idempotencyKey !== 'string'
-      || idempotencyKey.length === 0
-      || idempotencyKey.length > 120
-      || !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey))
-  ) {
-    throw new ValidationError({
-      message: '`idempotencyKey` must contain 1 to 120 visible ASCII characters.',
-      code: 'invalid_idempotency_key',
-      status: 0,
-    });
-  }
-};
-
 const postMessage = async (
   req: Requester,
   path: '/messages/template' | '/messages/text',
   body: Record<string, unknown>,
   idempotencyKey: string | undefined,
 ): Promise<SendMessageResponse> => {
-  validateIdempotencyKey(idempotencyKey);
+  assertIdempotencyKey(idempotencyKey);
   if (idempotencyKey !== undefined) body.idempotency_key = idempotencyKey;
 
   let replayed = false;
@@ -73,7 +55,7 @@ const postMessage = async (
     idempotent: true,
     ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     onHeaders: (h) => {
-      replayed = h.get('x-idempotent-replay') === 'true';
+      replayed = isIdempotentReplay(h);
     },
   });
 

@@ -77,7 +77,7 @@ final class Contacts
         $count = count($inputs);
         if ($count < 1 || $count > self::UPSERT_MAX_CONTACTS) {
             throw new ValidationError(
-                message: '`contacts` must hold 1 to 100 contacts.',
+                message: '`contacts` must contain 1 to 100 contacts.',
                 code: 'invalid_contacts',
                 status: 0,
             );
@@ -175,7 +175,7 @@ final class Contacts
         foreach ($tags as $tag) {
             if (!is_string($tag) || str_contains($tag, ',')) {
                 throw new ValidationError(
-                    message: '`tags` must be tag names without a comma.',
+                    message: '`tags` names may not contain a comma: the names are sent as one comma-separated list.',
                     code: 'invalid_import_tags',
                     status: 0,
                 );

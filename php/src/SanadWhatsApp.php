@@ -7,8 +7,13 @@ namespace Sanadwa\WhatsApp;
 use GuzzleHttp\Client;
 use Sanadwa\WhatsApp\Dto\HealthResponse;
 use Sanadwa\WhatsApp\Http\Requester;
+use Sanadwa\WhatsApp\Resources\Balance;
+use Sanadwa\WhatsApp\Resources\Campaigns;
+use Sanadwa\WhatsApp\Resources\Contacts;
 use Sanadwa\WhatsApp\Resources\Health;
 use Sanadwa\WhatsApp\Resources\Messages;
+use Sanadwa\WhatsApp\Resources\PhoneNumbers;
+use Sanadwa\WhatsApp\Resources\Tags;
 use Sanadwa\WhatsApp\Resources\Templates;
 use Sanadwa\WhatsApp\Resources\Webhooks;
 
@@ -20,6 +25,11 @@ final class SanadWhatsApp
     private readonly Templates $templatesResource;
     private readonly Messages $messagesResource;
     private readonly Webhooks $webhooksResource;
+    private readonly PhoneNumbers $phoneNumbersResource;
+    private readonly Balance $balanceResource;
+    private readonly Tags $tagsResource;
+    private readonly Contacts $contactsResource;
+    private readonly Campaigns $campaignsResource;
 
     public function __construct(Config|array $config)
     {
@@ -45,6 +55,11 @@ final class SanadWhatsApp
         $this->templatesResource = new Templates($requester);
         $this->messagesResource = new Messages($requester);
         $this->webhooksResource = new Webhooks();
+        $this->phoneNumbersResource = new PhoneNumbers($requester);
+        $this->balanceResource = new Balance($requester);
+        $this->tagsResource = new Tags($requester);
+        $this->contactsResource = new Contacts($requester);
+        $this->campaignsResource = new Campaigns($requester);
     }
 
     public function health(): HealthResponse
@@ -65,5 +80,30 @@ final class SanadWhatsApp
     public function webhooks(): Webhooks
     {
         return $this->webhooksResource;
+    }
+
+    public function phoneNumbers(): PhoneNumbers
+    {
+        return $this->phoneNumbersResource;
+    }
+
+    public function balance(): Balance
+    {
+        return $this->balanceResource;
+    }
+
+    public function tags(): Tags
+    {
+        return $this->tagsResource;
+    }
+
+    public function contacts(): Contacts
+    {
+        return $this->contactsResource;
+    }
+
+    public function campaigns(): Campaigns
+    {
+        return $this->campaignsResource;
     }
 }

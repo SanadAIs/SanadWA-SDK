@@ -1,6 +1,5 @@
 /**
- * Private helpers of the phone-number, balance, tag, contact and campaign
- * resources. Not exported from the package.
+ * Private helpers shared by the resources. Not exported from the package.
  */
 
 import { ValidationError } from '../errors.js';
@@ -42,13 +41,17 @@ export const writeOptions = (
   return idempotencyKey === undefined ? { idempotent: true } : { idempotent: true, idempotencyKey };
 };
 
+/** True when the response says it repeats an earlier call made with the same `Idempotency-Key`. */
+export const isIdempotentReplay = (headers: Headers): boolean =>
+  headers.get('x-idempotent-replay')?.trim().toLowerCase() === 'true';
+
 /** Validates a path id and returns it as an encoded path segment. */
 export const idSegment = (id: string): string => {
   const value: unknown = id;
   const text = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
   if (text.length === 0) {
     throw new ValidationError({
-      message: '`id` must be a non-empty string.',
+      message: '`id` must not be empty.',
       code: 'invalid_id',
       status: 0,
     });

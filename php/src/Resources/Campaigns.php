@@ -85,7 +85,7 @@ final class Campaigns
             body: $body,
             idempotent: true,
             onHeaders: static function (ResponseInterface $response) use (&$replayed): void {
-                $replayed = strtolower(trim($response->getHeaderLine('X-Idempotent-Replay'))) === 'true';
+                $replayed = ResourceSupport::isIdempotentReplay($response);
             },
             idempotencyKey: $options->idempotencyKey,
         );

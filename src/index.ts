@@ -14,6 +14,11 @@ import { health } from './resources/health.js';
 import { listTemplates } from './resources/templates.js';
 import { sendMessage, sendTextReply, getMessage } from './resources/messages.js';
 import { verifyWebhook } from './resources/webhooks.js';
+import { PhoneNumbersResource } from './resources/phone-numbers.js';
+import { BalanceResource } from './resources/balance.js';
+import { TagsResource } from './resources/tags.js';
+import { ContactsResource } from './resources/contacts.js';
+import { CampaignsResource } from './resources/campaigns.js';
 import type {
   ClientOptions,
   HealthResponse,
@@ -50,6 +55,12 @@ export class SanadWhatsApp {
     verify: (input: WebhookVerifyInput) => WebhookVerifyResult;
   } = { verify: verifyWebhook };
 
+  readonly phoneNumbers: PhoneNumbersResource;
+  readonly balance: BalanceResource;
+  readonly tags: TagsResource;
+  readonly contacts: ContactsResource;
+  readonly campaigns: CampaignsResource;
+
   constructor(opts: ClientOptions) {
     if (!opts || typeof opts.apiKey !== 'string' || opts.apiKey.length === 0) {
       throw new Error('SanadWhatsApp: `apiKey` is required.');
@@ -67,6 +78,12 @@ export class SanadWhatsApp {
       userAgent: opts.userAgent ?? DEFAULT_USER_AGENT,
       timeoutMs,
     });
+
+    this.phoneNumbers = new PhoneNumbersResource(this.#req);
+    this.balance = new BalanceResource(this.#req);
+    this.tags = new TagsResource(this.#req);
+    this.contacts = new ContactsResource(this.#req);
+    this.campaigns = new CampaignsResource(this.#req);
 
     this.templates = {
       list: (o) => listTemplates(this.#req, o),
@@ -124,6 +141,9 @@ export type {
   SendTextReplyOptions as SendTextOptions,
   SendTextReplyResponse as SendTextResponse,
 } from './types.js';
+
+export { PhoneNumbersResource, BalanceResource, TagsResource, ContactsResource, CampaignsResource };
+export type * from './resource-types.js';
 
 // Webhook fixtures for adopter unit tests.
 // `__` prefix marks this as a TESTING surface, not the supported runtime API.

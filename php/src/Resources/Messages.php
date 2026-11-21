@@ -11,9 +11,9 @@ use Sanadwa\WhatsApp\Dto\SendMessageResponse;
 use Sanadwa\WhatsApp\Dto\SendTextOptions;
 use Sanadwa\WhatsApp\Dto\SendTextReplyResponse;
 use Sanadwa\WhatsApp\Dto\Upstream;
-use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\Http\Requester;
 use Sanadwa\WhatsApp\Http\ResponseValidator;
+use Sanadwa\WhatsApp\Resources\Support\ResourceSupport;
 
 final class Messages
 {
@@ -73,7 +73,7 @@ final class Messages
         ?string $idempotencyKey,
     ): SendMessageResponse
     {
-        $this->validateIdempotencyKey($idempotencyKey);
+        ResourceSupport::validateIdempotencyKey($idempotencyKey);
         if ($idempotencyKey !== null) {
             $body['idempotency_key'] = $idempotencyKey;
         }
@@ -85,7 +85,7 @@ final class Messages
             body: $body,
             idempotent: true,
             onHeaders: static function (ResponseInterface $response) use (&$replayed): void {
-                $replayed = $response->getHeaderLine('x-idempotent-replay') === 'true';
+                $replayed = ResourceSupport::isIdempotentReplay($response);
             },
             idempotencyKey: $idempotencyKey,
         );
@@ -189,23 +189,5 @@ final class Messages
                 'data.last_status',
             ),
         );
-    }
-
-    private function validateIdempotencyKey(?string $idempotencyKey): void
-    {
-        if ($idempotencyKey === null) {
-            return;
-        }
-        if (
-            $idempotencyKey === ''
-            || strlen($idempotencyKey) > 120
-            || preg_match('/\A[\x21-\x7E]+\z/', $idempotencyKey) !== 1
-        ) {
-            throw new ValidationError(
-                message: '`idempotencyKey` must contain 1 to 120 visible ASCII characters.',
-                code: 'invalid_idempotency_key',
-                status: 0,
-            );
-        }
     }
 }

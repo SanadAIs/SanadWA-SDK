@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace Sanadwa\WhatsApp\Resources\Support;
 
+use Psr\Http\Message\ResponseInterface;
 use Sanadwa\WhatsApp\Dto\DeletedResource;
 use Sanadwa\WhatsApp\Dto\Page;
-use Sanadwa\WhatsApp\Exceptions\SanadApiError;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\Http\ResponseValidator;
 
 /**
- * Helpers shared by the phone-number, balance, tag, contact and campaign
- * resources: client-side checks and typed readers for response fields.
+ * Helpers shared by the resources: client-side checks and typed readers for
+ * response fields.
  *
  * @internal Not part of the public API; it may change in any release.
  */
@@ -38,6 +38,15 @@ final class ResourceSupport
                 status: 0,
             );
         }
+    }
+
+    /**
+     * True when the response says it repeats an earlier call made with the
+     * same `Idempotency-Key`.
+     */
+    public static function isIdempotentReplay(ResponseInterface $response): bool
+    {
+        return strtolower(trim($response->getHeaderLine('X-Idempotent-Replay'))) === 'true';
     }
 
     /**
@@ -272,11 +281,7 @@ final class ResourceSupport
 
     public static function malformed(string $field, string $reason): never
     {
-        throw new SanadApiError(
-            message: sprintf('Malformed response: field `%s` %s.', $field, $reason),
-            code: 'malformed_response',
-            status: 0,
-        );
+        ResponseValidator::malformed($field, $reason);
     }
 
     private static function required(array $source, string $key, string $field): mixed

@@ -5,6 +5,8 @@
  * handle the mapping.
  */
 
+import type { Page } from './resource-types.js';
+
 export interface ClientOptions {
   /** Tenant API key (e.g. `pk_live_…`). Required. */
   apiKey: string;
@@ -60,11 +62,8 @@ export interface ListTemplatesOptions {
   wabaId?: string;
 }
 
-export interface ListTemplatesResponse {
-  page: number;
-  limit: number;
-  data: Template[];
-}
+/** One page of templates: the same `Page` shape every paged list returns. */
+export interface ListTemplatesResponse extends Page<Template> {}
 
 export interface SendMessageOptions {
   phoneNumberId: string;

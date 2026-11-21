@@ -44,7 +44,7 @@ describe('SanadWhatsApp constructor', () => {
 });
 
 describe('SanadWhatsApp.health', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('GETs default base URL + /health and maps response', async () => {
@@ -91,7 +91,7 @@ describe('SanadWhatsApp.health', () => {
 });
 
 describe('SanadWhatsApp.templates.list', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('passes query string', async () => {
@@ -108,7 +108,7 @@ describe('SanadWhatsApp.templates.list', () => {
 });
 
 describe('SanadWhatsApp.messages.send', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('POSTs snake_case body and Idempotency-Key matches UUID v4', async () => {
@@ -166,7 +166,7 @@ describe('SanadWhatsApp.messages.send', () => {
 });
 
 describe('SanadWhatsApp.messages.sendText', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('POSTs a text reply and generates an Idempotency-Key', async () => {
@@ -201,7 +201,7 @@ describe('SanadWhatsApp.messages.sendText', () => {
 });
 
 describe('SanadWhatsApp.messages.get', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('404 → NotFoundError', async () => {
@@ -226,7 +226,7 @@ describe('SanadWhatsApp.webhooks.verify', () => {
 });
 
 describe('Custom retries config', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('retries=2 stops after 2 attempts on 500', async () => {

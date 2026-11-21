@@ -131,7 +131,7 @@ final class ResponseValidator
         return $source[$key];
     }
 
-    private static function malformed(string $field, string $reason): never
+    public static function malformed(string $field, string $reason): never
     {
         throw new SanadApiError(
             message: sprintf('Malformed response: field `%s` %s.', $field, $reason),

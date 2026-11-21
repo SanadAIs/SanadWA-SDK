@@ -15,6 +15,7 @@ import type {
 import {
   assertIdempotencyKey,
   idSegment,
+  isIdempotentReplay,
   pageQuery,
   toId,
   toNullableId,
@@ -29,7 +30,6 @@ import {
   type WireRecord,
 } from './resource-helpers.js';
 
-const REPLAY_HEADER = 'x-idempotent-replay';
 
 const toTemplate = (value: unknown): CampaignTemplate | null => {
   const template = toRecordOrNull(value);
@@ -150,7 +150,7 @@ export class CampaignsResource {
       idempotent: true,
       idempotencyKey,
       onHeaders: (headers) => {
-        replayed = headers.get(REPLAY_HEADER)?.trim().toLowerCase() === 'true';
+        replayed = isIdempotentReplay(headers);
       },
     });
     return { campaign: toCampaignFromEnvelope(raw), replayed };
