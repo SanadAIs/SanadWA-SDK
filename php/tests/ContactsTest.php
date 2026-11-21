@@ -246,8 +246,8 @@ final class ContactsTest extends TestCase
         $result = (new Contacts($this->requester($client)))->upsert([
             new ContactInput('+12025550123'),
             new ContactInput('+12025550124'),
-            new ContactInput('+12025550125', tags: ['missing']),
-            new ContactInput('+12025550126'),
+            new ContactInput('+12025550123', tags: ['missing']),
+            new ContactInput('+12025550124'),
         ]);
 
         self::assertEquals(new ContactUpsertSummary(1, 1, 1, 1), $result->summary);
@@ -511,11 +511,7 @@ final class ContactsTest extends TestCase
      */
     private function inputs(int $count): array
     {
-        $inputs = [];
-        for ($i = 0; $i < $count; $i++) {
-            $inputs[] = new ContactInput(sprintf('+1202555%04d', $i));
-        }
-
-        return $inputs;
+        // The SDK does not compare phones, so one fake number serves every item.
+        return array_fill(0, $count, new ContactInput('+12025550123'));
     }
 }
