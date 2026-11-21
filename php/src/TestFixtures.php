@@ -81,10 +81,12 @@ final class TestFixtures
     {
         $messageId = $overrides['messageId'] ?? '4242';
         $deliveredAt = $overrides['deliveredAt'] ?? '2026-05-10T12:00:00.000Z';
+        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED';
+        $toPhone = $overrides['toPhone'] ?? '+966500000000';
         $data = [
             'message_id' => $messageId,
-            'provider_msg_id' => 'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED',
-            'to_phone' => '+966500000000',
+            'provider_msg_id' => $providerMsgId,
+            'to_phone' => $toPhone,
             'delivered_at' => $deliveredAt,
         ];
 
@@ -93,6 +95,8 @@ final class TestFixtures
             $data,
             new WebhookEvent('message.delivered', [
                 'messageId' => $messageId,
+                'providerMsgId' => $providerMsgId,
+                'toPhone' => $toPhone,
                 'deliveredAt' => $deliveredAt,
                 'raw' => $data,
             ]),
@@ -104,10 +108,12 @@ final class TestFixtures
     {
         $messageId = $overrides['messageId'] ?? '4243';
         $readAt = $overrides['readAt'] ?? '2026-05-10T12:01:00.000Z';
+        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_READ';
+        $toPhone = $overrides['toPhone'] ?? '+966500000000';
         $data = [
             'message_id' => $messageId,
-            'provider_msg_id' => 'wamid.HBgMOTY2NTAwMDAwMDAw_READ',
-            'to_phone' => '+966500000000',
+            'provider_msg_id' => $providerMsgId,
+            'to_phone' => $toPhone,
             'read_at' => $readAt,
         ];
 
@@ -116,6 +122,8 @@ final class TestFixtures
             $data,
             new WebhookEvent('message.read', [
                 'messageId' => $messageId,
+                'providerMsgId' => $providerMsgId,
+                'toPhone' => $toPhone,
                 'readAt' => $readAt,
                 'raw' => $data,
             ]),
@@ -131,11 +139,31 @@ final class TestFixtures
         $title = $overrides['errorTitle'] ?? 'Message failed to send';
         $message = $overrides['errorMessage']
             ?? 'This message was not delivered to maintain healthy ecosystem engagement.';
-        $error = ['code' => $code, 'title' => $title, 'message' => $message];
+        $engagementDetails = 'In order to maintain a healthy ecosystem engagement, '
+            . 'the message failed to be delivered.';
+        // array_key_exists, not `??`: an explicit null override must stay null.
+        $errorData = array_key_exists('errorData', $overrides)
+            ? $overrides['errorData']
+            : ['details' => $engagementDetails];
+        $details = array_key_exists('details', $overrides)
+            ? $overrides['details']
+            : $engagementDetails;
+        $errorUserMsg = $overrides['errorUserMsg'] ?? null;
+        $providerMsgId = $overrides['providerMsgId'] ?? 'wamid.HBgMOTY2NTAwMDAwMDAw_FAILED';
+        $toPhone = $overrides['toPhone'] ?? '+966500000000';
+        // Production always sends all six keys, null when absent.
+        $error = [
+            'code' => $code,
+            'title' => $title,
+            'message' => $message,
+            'error_data' => $errorData,
+            'details' => $details,
+            'error_user_msg' => $errorUserMsg,
+        ];
         $data = [
             'message_id' => $messageId,
-            'provider_msg_id' => 'wamid.HBgMOTY2NTAwMDAwMDAw_FAILED',
-            'to_phone' => '+966500000000',
+            'provider_msg_id' => $providerMsgId,
+            'to_phone' => $toPhone,
             'failed_at' => $failedAt,
             'error' => $error,
         ];
@@ -145,8 +173,17 @@ final class TestFixtures
             $data,
             new WebhookEvent('message.failed', [
                 'messageId' => $messageId,
+                'providerMsgId' => $providerMsgId,
+                'toPhone' => $toPhone,
                 'failedAt' => $failedAt,
-                'error' => new WebhookFailedError($code, $title, $message),
+                'error' => new WebhookFailedError(
+                    $code,
+                    $title,
+                    $message,
+                    $errorData,
+                    $details,
+                    $errorUserMsg,
+                ),
                 'raw' => $data,
             ]),
             $overrides['secret'] ?? self::DEFAULT_SECRET,
@@ -183,11 +220,61 @@ final class TestFixtures
         );
     }
 
+    /**
+     * The console's "Send test event" delivery: an `inbound.message` whose data is flagged
+     * `test: true`. It verifies as a `test` event, which handlers should ignore.
+     *
+     * @param array{secret?: string} $overrides
+     */
+    public static function createTestEventFixture(array $overrides = []): array
+    {
+        $data = [
+            'test' => true,
+            'from' => '+966500000000',
+            'message' => ['type' => 'text', 'text' => ['body' => 'SanadWA test event.']],
+        ];
+
+        return self::buildFixture(
+            'inbound.message',
+            $data,
+            new WebhookEvent('test', [
+                'test' => true,
+                'from' => '+966500000000',
+                'text' => 'SanadWA test event.',
+                'raw' => $data,
+            ]),
+            $overrides['secret'] ?? self::DEFAULT_SECRET,
+        );
+    }
+
+    /**
+     * A correctly signed delivery this SDK version cannot type. It verifies as valid with
+     * `recognized === false` and an `unknown` event; answer 2xx and ignore it.
+     *
+     * @param array{eventType?: string, data?: array<string, mixed>, secret?: string} $overrides
+     */
+    public static function createUnknownEventFixture(array $overrides = []): array
+    {
+        $data = $overrides['data'] ?? [
+            'campaign_id' => '42',
+            'completed_at' => '2026-11-21T10:00:00.000Z',
+        ];
+
+        return self::buildFixture(
+            $overrides['eventType'] ?? 'campaign.completed',
+            $data,
+            new WebhookEvent('unknown', ['raw' => $data]),
+            $overrides['secret'] ?? self::DEFAULT_SECRET,
+            false,
+        );
+    }
+
     private static function buildFixture(
         string $event,
         array $data,
         WebhookEvent $expectedEvent,
         string $secret,
+        bool $recognized = true,
     ): array {
         $rawBody = json_encode(
             ['event' => $event, 'tenant_id' => self::DEFAULT_TENANT_ID, 'data' => $data],
@@ -199,6 +286,8 @@ final class TestFixtures
             'signature' => 'sha256=' . hash_hmac('sha256', $rawBody, $secret),
             'secret' => $secret,
             'expectedEvent' => $expectedEvent,
+            'recognized' => $recognized,
+            'eventType' => $event,
         ];
     }
 }
