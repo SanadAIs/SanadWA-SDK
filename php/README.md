@@ -27,7 +27,7 @@ For Node and TypeScript, use the [TypeScript SDK](../README.md).
 The package is not on Packagist yet. Install it from the GitHub repository:
 
 ```sh
-composer config repositories.sanadwa-sdk vcs https://github.com/x0bdr/sanad-whatsapp-sdk
+composer config repositories.sanadwa-sdk vcs https://github.com/x0bdr/SanadWA-SDK
 composer require sanadwa/whatsapp-sdk-php:^0.4
 ```
 

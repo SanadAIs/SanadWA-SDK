@@ -5,10 +5,10 @@
   "homepage": "https://developers.sanadwa.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/x0bdr/sanad-whatsapp-sdk.git"
+    "url": "git+https://github.com/x0bdr/SanadWA-SDK.git"
   },
   "bugs": {
-    "url": "https://github.com/x0bdr/sanad-whatsapp-sdk/issues"
+    "url": "https://github.com/x0bdr/SanadWA-SDK/issues"
   },
   "type": "module",
   "main": "./dist/index.cjs",

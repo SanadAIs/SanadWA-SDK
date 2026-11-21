@@ -4,8 +4,8 @@
     "license": "MIT",
     "homepage": "https://developers.sanadwa.com",
     "support": {
-        "source": "https://github.com/x0bdr/sanad-whatsapp-sdk",
-        "issues": "https://github.com/x0bdr/sanad-whatsapp-sdk/issues",
+        "source": "https://github.com/x0bdr/SanadWA-SDK",
+        "issues": "https://github.com/x0bdr/SanadWA-SDK/issues",
         "docs": "https://developers.sanadwa.com"
     },
     "require": {

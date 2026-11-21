@@ -25,11 +25,11 @@ For PHP and Laravel, use the [PHP SDK](php/README.md).
 The package is not on the npm registry yet. Install the tarball attached to the GitHub release:
 
 ```sh
-npm install https://github.com/x0bdr/sanad-whatsapp-sdk/releases/download/v0.4.0/sanadwa-whatsapp-sdk-0.4.0.tgz
+npm install https://github.com/x0bdr/SanadWA-SDK/releases/download/v0.4.0/sanadwa-whatsapp-sdk-0.4.0.tgz
 ```
 
 This URL works once the `v0.4.0` release and its tarball are on the
-[releases page](https://github.com/x0bdr/sanad-whatsapp-sdk/releases). If it answers 404, the
+[releases page](https://github.com/x0bdr/SanadWA-SDK/releases). If it answers 404, the
 release is not out yet. You can build the same tarball from a checkout of this repository:
 
 ```sh
