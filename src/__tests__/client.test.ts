@@ -6,8 +6,10 @@ import {
   NotFoundError,
   ServerError,
   ValidationError,
+  SendFailedError,
   isSanadApiError,
 } from '../index.js';
+import type { WebhookEvent, WebhookInvalidReason, WebhookVerifyResult } from '../index.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -54,6 +56,21 @@ describe('SanadWhatsApp.health', () => {
     await vi.runAllTimersAsync();
     const out = await p;
     expect(out).toEqual({ tenantId: 't_1', scope: 'send', serverTime: '2026-05-10T00:00:00Z' });
+    expect(fetchImpl.mock.calls[0]![0]).toBe('https://api.sanadwa.com/v1/health');
+  });
+
+  it('uses the older base path unchanged when it is passed explicitly', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(mkResponse(200, {
+      success: true, tenant_id: 't', scope: 's', server_time: 'now',
+    }));
+    const sdk = new SanadWhatsApp({
+      apiKey: 'pk_test_fake_key',
+      baseUrl: 'https://api.sanadwa.com/api/public/v1',
+      fetch: fetchImpl as unknown as typeof fetch,
+    });
+    const p = sdk.health();
+    await vi.runAllTimersAsync();
+    await p;
     expect(fetchImpl.mock.calls[0]![0]).toBe('https://api.sanadwa.com/api/public/v1/health');
   });
 
@@ -111,7 +128,7 @@ describe('SanadWhatsApp.messages.send', () => {
     });
     const headers = init.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(UUID_RE);
-    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.3.0');
+    expect(headers['User-Agent']).toBe('@sanadwa/whatsapp-sdk/0.4.0');
   });
 
   it('UUID is reused across retries (D-08 invariant)', async () => {
@@ -170,9 +187,7 @@ describe('SanadWhatsApp.messages.sendText', () => {
     await vi.runAllTimersAsync();
     const result = await promise;
 
-    expect(fetchImpl.mock.calls[0]![0]).toBe(
-      'https://api.sanadwa.com/api/public/v1/messages/text',
-    );
+    expect(fetchImpl.mock.calls[0]![0]).toBe('https://api.sanadwa.com/v1/messages/text');
     const init = fetchImpl.mock.calls[0]![1] as RequestInit;
     expect(JSON.parse(init.body as string)).toEqual({
       phone_number_id: 'PNID',
@@ -226,12 +241,120 @@ describe('Custom retries config', () => {
   });
 });
 
+describe('timeoutMs option', () => {
+  const okHealth = () => mkResponse(200, { success: true, tenant_id: 't', scope: 's', server_time: 'now' });
+  const signalOf = (fetchImpl: ReturnType<typeof vi.fn>, call = 0): AbortSignal | undefined =>
+    (fetchImpl.mock.calls[call]![1] as RequestInit).signal ?? undefined;
+
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('defaults to 30000 ms and passes an AbortSignal to fetch', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockResolvedValue(okHealth());
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', fetch: fetchImpl as unknown as typeof fetch });
+    await sdk.health();
+    expect(timeoutSpy).toHaveBeenCalledWith(30000);
+    expect(signalOf(fetchImpl)).toBeInstanceOf(AbortSignal);
+  });
+
+  it('passes a custom timeoutMs through', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchImpl = vi.fn().mockResolvedValue(okHealth());
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', timeoutMs: 1500, fetch: fetchImpl as unknown as typeof fetch });
+    await sdk.health();
+    expect(timeoutSpy).toHaveBeenCalledWith(1500);
+  });
+
+  it('timeoutMs: 0 passes no signal', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okHealth());
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', timeoutMs: 0, fetch: fetchImpl as unknown as typeof fetch });
+    await sdk.health();
+    expect(signalOf(fetchImpl)).toBeUndefined();
+  });
+
+  it.each([
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['a string', '30000' as unknown as number],
+  ])('%s throws in the constructor', (_name, timeoutMs) => {
+    expect(() => new SanadWhatsApp({ apiKey: 'pk_test_fake_key', timeoutMs }))
+      .toThrow('SanadWhatsApp: `timeoutMs` must be a non-negative finite number.');
+  });
+
+  it('a timed-out attempt is retried and ends as ServerError code timeout', async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn().mockImplementation(() =>
+      Promise.reject(new DOMException('The operation was aborted due to timeout', 'TimeoutError')));
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', retries: 3, fetch: fetchImpl as unknown as typeof fetch });
+    const p = sdk.health().catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const err = await p;
+    expect(err).toBeInstanceOf(ServerError);
+    expect((err as ServerError).code).toBe('timeout');
+    expect((err as ServerError).status).toBe(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('send_failed through the client', () => {
+  it('throws SendFailedError after exactly one call', async () => {
+    const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve(mkResponse(503, {
+      success: false,
+      code: 'send_failed',
+      message: 'WhatsApp did not accept the message.',
+      upstream_code: '131000',
+      meta_error: { title: 'Something went wrong', message: 'Something went wrong', code: 131000, subcode: null, type: 'OAuthException', fbtrace_id: 'FAKE_TRACE' },
+    })));
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', fetch: fetchImpl as unknown as typeof fetch });
+    const err = await sdk.messages.send({ phoneNumberId: '100000000000001', toPhone: '+966500000000', templateName: 'hello_world' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SendFailedError);
+    expect(err).not.toBeInstanceOf(ServerError);
+    expect((err as SendFailedError).upstreamStatus).toBe(503);
+    expect((err as SendFailedError).upstreamCode).toBe('131000');
+    expect((err as SendFailedError).metaError).toMatchObject({ code: 131000, fbtrace_id: 'FAKE_TRACE' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Webhook types', () => {
+  it('WebhookEvent switch covers test and unknown; invalid results carry a typed reason', () => {
+    const describeEvent = (event: WebhookEvent): string => {
+      switch (event.type) {
+        case 'message.sent': return event.data.messageId ?? 'no-id';
+        case 'message.delivered': return event.data.providerMsgId ?? event.data.messageId;
+        case 'message.read': return event.data.toPhone ?? event.data.messageId;
+        case 'message.failed': return event.data.error.errorUserMsg ?? event.data.error.details ?? 'failed';
+        case 'inbound.message': return event.data.from;
+        case 'test': return event.data.text ?? 'test';
+        case 'unknown': return Object.keys(event.data.raw).join(',');
+        default: {
+          const exhaustive: never = event;
+          return exhaustive;
+        }
+      }
+    };
+    const sdk = new SanadWhatsApp({ apiKey: 'pk_test_fake_key', fetch: vi.fn() as unknown as typeof fetch });
+    const result: WebhookVerifyResult = sdk.webhooks.verify({ rawBody: '{}', signature: 'sha256=', secret: 's' });
+    if (result.valid) {
+      expect(describeEvent(result.event)).toBeTypeOf('string');
+    } else {
+      const reason: WebhookInvalidReason = result.reason;
+      expect(reason).toBe('empty_signature');
+      expect(result.signatureValid).toBe(false);
+      expect(result.recognized).toBe(false);
+    }
+  });
+});
+
 describe('Re-exports', () => {
   it('errors and type guard re-exported', () => {
     expect(SanadApiError).toBeDefined();
     expect(RateLimitedError).toBeDefined();
     expect(NotFoundError).toBeDefined();
     expect(ServerError).toBeDefined();
+    expect(new SendFailedError({ message: 'm', code: 'send_failed', status: 500 })).toBeInstanceOf(SanadApiError);
     expect(typeof isSanadApiError).toBe('function');
   });
 });
