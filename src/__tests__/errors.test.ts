@@ -6,6 +6,7 @@ import {
   AuthError,
   NotFoundError,
   ServerError,
+  SendFailedError,
   isSanadApiError,
 } from '../errors.js';
 
@@ -65,6 +66,41 @@ describe('RateLimitedError', () => {
     const err = new RateLimitedError({ message: 'slow', code: 'rate_limited', status: 429 });
     expect(err.retryAfterSec).toBeNull();
   });
+
+  it('carries limit and remaining, defaulting to null', () => {
+    const err = new RateLimitedError({
+      message: 'slow', code: 'rate_limited', status: 429, limit: 60, remaining: 0,
+    });
+    expect(err.limit).toBe(60);
+    expect(err.remaining).toBe(0);
+    const bare = new RateLimitedError({ message: 'slow', code: 'rate_limited', status: 429 });
+    expect(bare.limit).toBeNull();
+    expect(bare.remaining).toBeNull();
+  });
+});
+
+describe('SendFailedError', () => {
+  it('extends only SanadApiError and exposes upstreamStatus, upstreamCode, metaError', () => {
+    const metaError = { title: 't', message: 'm', code: 131026, subcode: 1, type: 'x', fbtrace_id: 'FAKE' };
+    const err = new SendFailedError({
+      message: 'send failed', code: 'send_failed', status: 403, upstreamCode: '131026', metaError,
+    });
+    expect(err).toBeInstanceOf(SanadApiError);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(AuthError);
+    expect(err).not.toBeInstanceOf(ServerError);
+    expect(err.name).toBe('SendFailedError');
+    expect(err.status).toBe(403);
+    expect(err.upstreamStatus).toBe(403);
+    expect(err.upstreamCode).toBe('131026');
+    expect(err.metaError).toBe(metaError);
+  });
+
+  it('defaults metaError to null', () => {
+    const err = new SendFailedError({ message: 'x', code: 'send_failed', status: 500 });
+    expect(err.metaError).toBeNull();
+    expect(err.upstreamStatus).toBe(500);
+  });
 });
 
 describe('subclasses keep their own name', () => {
@@ -82,7 +118,7 @@ describe('subclasses keep their own name', () => {
 
 describe('ServerError', () => {
   it('carries upstreamCode when provided', () => {
-    const e = new ServerError({ message: 'send fail', code: 'send_failed', status: 502, upstreamCode: 'WA_400' });
+    const e = new ServerError({ message: 'upstream fail', code: 'bad_gateway', status: 502, upstreamCode: 'WA_400' });
     expect(e.upstreamCode).toBe('WA_400');
     expect(e.name).toBe('ServerError');
     expect(e).toBeInstanceOf(SanadApiError);
