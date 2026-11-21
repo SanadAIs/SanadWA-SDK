@@ -133,28 +133,30 @@ export interface Message {
 }
 
 /**
- * Structured failure reason on a `message.failed` event. Mirrors the live API
- * `data.error` object (`{ code, title, message }`) — NOT a bare string.
+ * Structured failure reason on a `message.failed` event. Mirrors the API's
+ * `data.error` object, which always carries these six keys (`null` when
+ * WhatsApp gave no value).
  */
 export interface WebhookFailedError {
+  /** WhatsApp error code, e.g. `131049`. */
   code: number | null;
   title: string | null;
   message: string | null;
+  /** `error_data`: WhatsApp's structured detail object, unchanged. */
+  errorData: Record<string, unknown> | null;
+  /** `details`: the human-readable reason, usually more specific than `title`. */
+  details: string | null;
+  /** `error_user_msg`: a message WhatsApp suggests showing to the user. */
+  errorUserMsg: string | null;
 }
 
 /**
- * Discriminated union covering all webhook event types currently emitted by
- * the SANAD WhatsApp Public API. Narrow on `type` for exhaustive handling.
- *
- * The live wire envelope is `{ event, tenant_id, data }` (snake_case payload
- * under `data`); the SDK narrows on `event` and maps the core `data` fields to
- * camelCase. Every member also exposes `raw` — the full unmapped `data` object —
- * so adopters can read fields the SDK does not surface (e.g. `provider_msg_id`,
- * inbound `media`/`button`) without the SDK silently dropping them.
+ * Data of a `message.sent` event. `messageId` is the WhatsApp message id
+ * (`wamid.…`) and is `null` when WhatsApp returned none.
  */
 export type MessageSentWebhookData =
   | {
-      messageId: string;
+      messageId: string | null;
       messageType: 'template';
       toPhone: string;
       templateName: string;
@@ -164,7 +166,7 @@ export type MessageSentWebhookData =
       raw: Record<string, unknown>;
     }
   | {
-      messageId: string;
+      messageId: string | null;
       messageType: 'text';
       toPhone: string;
       templateName: null;
@@ -174,19 +176,120 @@ export type MessageSentWebhookData =
       raw: Record<string, unknown>;
     };
 
+/**
+ * `message.delivered` data.
+ *
+ * `messageId` is SanadWA's row id. `providerMsgId` is the WhatsApp message id
+ * (`wamid.…`): match on it against the `messageId` a send returned, and pass
+ * it to `messages.get()`.
+ */
+export interface MessageDeliveredWebhookData {
+  messageId: string;
+  providerMsgId: string | null;
+  toPhone: string | null;
+  deliveredAt: string;
+  raw: Record<string, unknown>;
+}
+
+/**
+ * `message.read` data.
+ *
+ * `messageId` is SanadWA's row id. `providerMsgId` is the WhatsApp message id
+ * (`wamid.…`): match on it against the `messageId` a send returned, and pass
+ * it to `messages.get()`.
+ */
+export interface MessageReadWebhookData {
+  messageId: string;
+  providerMsgId: string | null;
+  toPhone: string | null;
+  readAt: string;
+  raw: Record<string, unknown>;
+}
+
+/**
+ * `message.failed` data.
+ *
+ * `messageId` is SanadWA's row id. `providerMsgId` is the WhatsApp message id
+ * (`wamid.…`): match on it against the `messageId` a send returned, and pass
+ * it to `messages.get()`.
+ */
+export interface MessageFailedWebhookData {
+  messageId: string;
+  providerMsgId: string | null;
+  toPhone: string | null;
+  failedAt: string;
+  error: WebhookFailedError;
+  raw: Record<string, unknown>;
+}
+
+/**
+ * Discriminated union of webhook events. Narrow on `type`.
+ *
+ * The wire envelope is `{ event, tenant_id, data }` (snake_case under
+ * `data`); the SDK maps the core fields to camelCase. Every member also
+ * exposes `raw`, the full unmapped `data` object, so fields the SDK does not
+ * surface stay readable.
+ *
+ * Two members are not message events:
+ * - `test`: the console's "Send test event" delivery (any delivery whose
+ *   `data.test` is `true`). Answer 2xx and ignore it.
+ * - `unknown`: a correctly signed delivery the SDK cannot type (a newer event
+ *   name, or a known one with missing fields). Answer 2xx; read `raw` if you
+ *   want to handle it.
+ */
 export type WebhookEvent =
   | { type: 'message.sent'; data: MessageSentWebhookData }
-  | { type: 'message.delivered'; data: { messageId: string; deliveredAt: string; raw: Record<string, unknown> } }
-  | { type: 'message.read'; data: { messageId: string; readAt: string; raw: Record<string, unknown> } }
-  | { type: 'message.failed'; data: { messageId: string; failedAt: string; error: WebhookFailedError; raw: Record<string, unknown> } }
-  | { type: 'inbound.message'; data: { from: string; messageType: string; messageId: string | null; text?: string; timestamp?: string; raw: Record<string, unknown> } };
+  | { type: 'message.delivered'; data: MessageDeliveredWebhookData }
+  | { type: 'message.read'; data: MessageReadWebhookData }
+  | { type: 'message.failed'; data: MessageFailedWebhookData }
+  | { type: 'inbound.message'; data: { from: string; messageType: string; messageId: string | null; text?: string; timestamp?: string; raw: Record<string, unknown> } }
+  | { type: 'test'; data: { test: true; from: string | null; text: string | null; raw: Record<string, unknown> } }
+  | { type: 'unknown'; data: { raw: Record<string, unknown> } };
 
 export interface WebhookVerifyInput {
+  /** The request body exactly as received (not re-serialized). */
   rawBody: string | Uint8Array;
+  /** The `X-Sanad-Signature` header value (`sha256=<hex>`). */
   signature: string;
+  /** The webhook secret. */
   secret: string;
 }
 
+/** Why a delivery failed verification. */
+export type WebhookInvalidReason =
+  | 'invalid_input'
+  | 'invalid_secret'
+  | 'missing_body'
+  | 'malformed_signature'
+  | 'empty_signature'
+  | 'signature_length_mismatch'
+  | 'signature_mismatch'
+  /** An unexpected internal exception. */
+  | 'verification_error';
+
+/**
+ * Result of `verifyWebhook`.
+ *
+ * `valid` (same value as `signatureValid`) is true exactly when the signature
+ * matches the raw body; nothing else can make it false. Answer 401 only when
+ * it is false. Otherwise answer 2xx and act only on the event types you
+ * handle.
+ */
 export type WebhookVerifyResult =
-  | { valid: true; event: WebhookEvent }
-  | { valid: false; reason: string };
+  | {
+      valid: true;
+      signatureValid: true;
+      /** False when `event.type` is `unknown`. */
+      recognized: boolean;
+      /** The wire event name, or `null` when the body carries none. */
+      eventType: string | null;
+      /** The parsed JSON body, or `null` when the body is not valid JSON. */
+      envelope: unknown;
+      event: WebhookEvent;
+    }
+  | {
+      valid: false;
+      signatureValid: false;
+      recognized: false;
+      reason: WebhookInvalidReason;
+    };

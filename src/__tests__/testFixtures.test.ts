@@ -1,48 +1,89 @@
 /**
- * Phase 60 OPS-V2-04 — webhook fixtures unit tests.
+ * Webhook fixture tests.
  *
- * Each fixture must round-trip through verifyWebhook to {valid:true, event}
- * matching the declared expectedEvent. Mutation tests confirm that tampering
- * with the body or signature flips verification to {valid:false, ...}.
+ * Every fixture must round-trip through `verifyWebhook`: valid, with the
+ * fixture's `recognized`, `eventType` and `expectedEvent`. Tampering with the
+ * body, the signature or the secret must flip the result to invalid.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { __testFixtures, verifyWebhook } from '../index.js';
+import type { WebhookFixture } from '../index.js';
 
-const fixtures = [
+const fixtures: Array<{ name: string; build: (secret?: string) => WebhookFixture; recognized: boolean; eventType: string }> = [
   {
-    name: 'message.delivered',
-    build: () => __testFixtures.createMessageDeliveredFixture(),
+    name: 'createMessageSentFixture',
+    build: (secret) => __testFixtures.createMessageSentFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'message.sent',
   },
   {
-    name: 'message.read',
-    build: () => __testFixtures.createMessageReadFixture(),
+    name: 'createMessageDeliveredFixture',
+    build: (secret) => __testFixtures.createMessageDeliveredFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'message.delivered',
   },
   {
-    name: 'inbound.message',
-    build: () => __testFixtures.createInboundMessageFixture(),
+    name: 'createMessageReadFixture',
+    build: (secret) => __testFixtures.createMessageReadFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'message.read',
   },
-] as const;
+  {
+    name: 'createMessageFailedFixture',
+    build: (secret) => __testFixtures.createMessageFailedFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'message.failed',
+  },
+  {
+    name: 'createInboundMessageFixture',
+    build: (secret) => __testFixtures.createInboundMessageFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'inbound.message',
+  },
+  {
+    name: 'createTestEventFixture',
+    build: (secret) => __testFixtures.createTestEventFixture(secret ? { secret } : {}),
+    recognized: true,
+    eventType: 'inbound.message',
+  },
+  {
+    name: 'createUnknownEventFixture',
+    build: (secret) => __testFixtures.createUnknownEventFixture(secret ? { secret } : {}),
+    recognized: false,
+    eventType: 'campaign.completed',
+  },
+];
+
+const verifyFixture = (f: WebhookFixture) =>
+  verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: f.secret });
 
 describe('__testFixtures', () => {
   for (const fx of fixtures) {
     describe(fx.name, () => {
-      it('round-trips through verifyWebhook to {valid:true}', () => {
+      it('declares recognized and eventType', () => {
         const f = fx.build();
-        const result = verifyWebhook({
-          rawBody: f.rawBody,
-          signature: f.signature,
-          secret: f.secret,
+        expect(f.recognized).toBe(fx.recognized);
+        expect(f.eventType).toBe(fx.eventType);
+      });
+
+      it('round-trips through verifyWebhook', () => {
+        const f = fx.build();
+        expect(verifyFixture(f)).toEqual({
+          valid: true,
+          signatureValid: true,
+          recognized: f.recognized,
+          eventType: f.eventType,
+          envelope: JSON.parse(f.rawBody),
+          event: f.expectedEvent,
         });
-        expect(result).toEqual({ valid: true, event: f.expectedEvent });
       });
 
       it('mutating rawBody flips to invalid', () => {
         const f = fx.build();
-        const tampered = f.rawBody.replace(/}$/, ',"x":1}');
         const result = verifyWebhook({
-          rawBody: tampered,
+          rawBody: f.rawBody.replace(/}$/, ',"x":1}'),
           signature: f.signature,
           secret: f.secret,
         });
@@ -52,100 +93,163 @@ describe('__testFixtures', () => {
       it('mutating signature flips to invalid', () => {
         const f = fx.build();
         const bad = f.signature.slice(0, -1) + (f.signature.endsWith('a') ? 'b' : 'a');
-        const result = verifyWebhook({
-          rawBody: f.rawBody,
-          signature: bad,
-          secret: f.secret,
-        });
+        const result = verifyWebhook({ rawBody: f.rawBody, signature: bad, secret: f.secret });
         expect(result.valid).toBe(false);
       });
 
       it('wrong secret flips to invalid', () => {
         const f = fx.build();
-        const result = verifyWebhook({
-          rawBody: f.rawBody,
-          signature: f.signature,
-          secret: 'whsec_different',
-        });
+        const result = verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: 'whsec_different' });
         expect(result.valid).toBe(false);
       });
 
       it('signature header includes the sha256= prefix', () => {
+        expect(fx.build().signature.startsWith('sha256=')).toBe(true);
+      });
+
+      it('honors a custom secret', () => {
+        const custom = fx.build('whsec_custom_for_test');
+        expect(custom.secret).toBe('whsec_custom_for_test');
+        expect(verifyFixture(custom).valid).toBe(true);
+        // A default-secret fixture must not verify with the custom secret.
         const f = fx.build();
-        expect(f.signature.startsWith('sha256=')).toBe(true);
+        expect(verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: custom.secret }).valid).toBe(false);
       });
     });
   }
 
   it('createMessageDeliveredFixture honors overrides', () => {
     const f = __testFixtures.createMessageDeliveredFixture({
-      messageId: 'wamid.OVERRIDE',
+      messageId: '9001',
       deliveredAt: '2030-01-01T00:00:00.000Z',
+      providerMsgId: 'wamid.FAKE_OVERRIDE_0001',
+      toPhone: '+12025550123',
     });
     expect(f.expectedEvent).toEqual({
       type: 'message.delivered',
       data: {
-        messageId: 'wamid.OVERRIDE',
+        messageId: '9001',
+        providerMsgId: 'wamid.FAKE_OVERRIDE_0001',
+        toPhone: '+12025550123',
         deliveredAt: '2030-01-01T00:00:00.000Z',
         raw: {
-          message_id: 'wamid.OVERRIDE',
-          provider_msg_id: 'wamid.HBgMOTY2NTAwMDAwMDAw_DELIVERED',
-          to_phone: '+966500000000',
+          message_id: '9001',
+          provider_msg_id: 'wamid.FAKE_OVERRIDE_0001',
+          to_phone: '+12025550123',
           delivered_at: '2030-01-01T00:00:00.000Z',
+        },
+      },
+    });
+    expect(verifyFixture(f)).toMatchObject({ valid: true, event: f.expectedEvent });
+  });
+
+  it('delivered and read fixtures expose providerMsgId and toPhone by default', () => {
+    const delivered = __testFixtures.createMessageDeliveredFixture().expectedEvent;
+    const read = __testFixtures.createMessageReadFixture().expectedEvent;
+    expect(delivered).toMatchObject({ data: { providerMsgId: expect.stringMatching(/^wamid\./), toPhone: '+966500000000' } });
+    expect(read).toMatchObject({ data: { providerMsgId: expect.stringMatching(/^wamid\./), toPhone: '+966500000000' } });
+  });
+
+  it('createMessageReadFixture honors providerMsgId and toPhone overrides', () => {
+    const f = __testFixtures.createMessageReadFixture({ providerMsgId: 'wamid.FAKE_READ_0002', toPhone: '+12025550124' });
+    expect(f.expectedEvent).toMatchObject({ data: { providerMsgId: 'wamid.FAKE_READ_0002', toPhone: '+12025550124' } });
+    expect(verifyFixture(f)).toMatchObject({ valid: true, event: f.expectedEvent });
+  });
+
+  it('createMessageFailedFixture carries the six-key error by default', () => {
+    const f = __testFixtures.createMessageFailedFixture();
+    const sentence = 'In order to maintain a healthy ecosystem engagement, the message failed to be delivered.';
+    expect(JSON.parse(f.rawBody).data.error).toEqual({
+      code: 131049,
+      title: 'Message failed to send',
+      message: 'This message was not delivered to maintain healthy ecosystem engagement.',
+      error_data: { details: sentence },
+      details: sentence,
+      error_user_msg: null,
+    });
+    expect(f.expectedEvent).toMatchObject({
+      type: 'message.failed',
+      data: {
+        messageId: '4244',
+        providerMsgId: expect.stringMatching(/^wamid\./),
+        toPhone: '+966500000000',
+        error: {
+          code: 131049,
+          title: 'Message failed to send',
+          message: 'This message was not delivered to maintain healthy ecosystem engagement.',
+          errorData: { details: sentence },
+          details: sentence,
+          errorUserMsg: null,
         },
       },
     });
   });
 
-  it('createMessageSentFixture round-trips to {valid:true}', () => {
-    const f = __testFixtures.createMessageSentFixture();
-    const result = verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: f.secret });
-    expect(result).toEqual({ valid: true, event: f.expectedEvent });
+  it('createMessageFailedFixture honors the error overrides', () => {
+    const f = __testFixtures.createMessageFailedFixture({
+      errorCode: 131026,
+      errorTitle: 'Message undeliverable',
+      errorMessage: 'Message undeliverable',
+      errorData: null,
+      details: null,
+      errorUserMsg: 'Ask the customer to update the app.',
+      providerMsgId: 'wamid.FAKE_FAILED_0002',
+      toPhone: '+12025550123',
+    });
+    expect(f.expectedEvent).toMatchObject({
+      data: {
+        providerMsgId: 'wamid.FAKE_FAILED_0002',
+        toPhone: '+12025550123',
+        error: {
+          code: 131026,
+          title: 'Message undeliverable',
+          message: 'Message undeliverable',
+          errorData: null,
+          details: null,
+          errorUserMsg: 'Ask the customer to update the app.',
+        },
+      },
+    });
+    expect(verifyFixture(f)).toMatchObject({ valid: true, event: f.expectedEvent });
   });
 
-  it('createMessageFailedFixture round-trips with structured error', () => {
-    const f = __testFixtures.createMessageFailedFixture();
-    const result = verifyWebhook({ rawBody: f.rawBody, signature: f.signature, secret: f.secret });
-    expect(result).toEqual({ valid: true, event: f.expectedEvent });
-    if (result.valid && result.event.type === 'message.failed') {
-      expect(result.event.data.error.code).toBe(131049);
-    }
+  it('createTestEventFixture mirrors the console test delivery', () => {
+    const f = __testFixtures.createTestEventFixture();
+    const data = { test: true, from: '+966500000000', message: { type: 'text', text: { body: 'SanadWA test event.' } } };
+    expect(JSON.parse(f.rawBody)).toEqual({ event: 'inbound.message', tenant_id: 1, data });
+    expect(f.expectedEvent).toEqual({
+      type: 'test',
+      data: { test: true, from: '+966500000000', text: 'SanadWA test event.', raw: data },
+    });
+  });
+
+  it('createUnknownEventFixture defaults and overrides', () => {
+    const f = __testFixtures.createUnknownEventFixture();
+    const data = { campaign_id: '42', completed_at: '2026-11-21T10:00:00.000Z' };
+    expect(JSON.parse(f.rawBody)).toEqual({ event: 'campaign.completed', tenant_id: 1, data });
+    expect(f.expectedEvent).toEqual({ type: 'unknown', data: { raw: data } });
+
+    const custom = __testFixtures.createUnknownEventFixture({ eventType: 'contact.updated', data: { contact_id: '7' } });
+    expect(custom.eventType).toBe('contact.updated');
+    expect(custom.recognized).toBe(false);
+    expect(verifyFixture(custom)).toMatchObject({
+      valid: true,
+      recognized: false,
+      eventType: 'contact.updated',
+      event: { type: 'unknown', data: { raw: { contact_id: '7' } } },
+    });
   });
 
   it('createInboundMessageFixture honors overrides', () => {
     const f = __testFixtures.createInboundMessageFixture({
-      fromPhone: '+15551112222',
+      fromPhone: '+12025550123',
       text: 'custom',
       messageType: 'text',
     });
-    const r = verifyWebhook({
-      rawBody: f.rawBody,
-      signature: f.signature,
-      secret: f.secret,
+    expect(verifyFixture(f)).toMatchObject({
+      valid: true,
+      recognized: true,
+      event: { type: 'inbound.message', data: { from: '+12025550123', text: 'custom' } },
     });
-    expect(r.valid).toBe(true);
-    if (r.valid) expect(r.event.type).toBe('inbound.message');
-  });
-
-  it('honors a custom secret across all three fixtures', () => {
-    for (const fx of fixtures) {
-      const f = fx.build();
-      const customSecret = 'whsec_custom_for_test';
-      // Re-build with custom secret via the override pathway.
-      let custom;
-      if (fx.name === 'message.delivered')
-        custom = __testFixtures.createMessageDeliveredFixture({ secret: customSecret });
-      else if (fx.name === 'message.read')
-        custom = __testFixtures.createMessageReadFixture({ secret: customSecret });
-      else custom = __testFixtures.createInboundMessageFixture({ secret: customSecret });
-      expect(custom.secret).toBe(customSecret);
-      // Default-secret fixture must NOT verify with the custom secret.
-      const cross = verifyWebhook({
-        rawBody: f.rawBody,
-        signature: f.signature,
-        secret: customSecret,
-      });
-      expect(cross.valid).toBe(false);
-    }
   });
 });
