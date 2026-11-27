@@ -6,6 +6,8 @@
  * typed `| null` is `null` when the API sends `null` or leaves the key out.
  */
 
+import type { SendMessageOptions, SendTextReplyOptions } from './types.js';
+
 // ── Pagination ──────────────────────────────────────────────────────────────
 
 /**
@@ -312,3 +314,74 @@ export interface CreatedCampaign {
   /** `true` when the API answered with an earlier result for the same key. */
   replayed: boolean;
 }
+
+// ── Send previews ───────────────────────────────────────────────────────────
+
+/** The refusal the real call would answer, as data. */
+export interface SendPreviewRefusal {
+  /** The HTTP status the real call would use. */
+  status: number;
+  /** The real call's own code, spelled as that call answers it (for example `PREPAID_CREDIT_CAP_REACHED` or `insufficient_credits`). */
+  code: string;
+  message: string;
+  /** The same message in Arabic. */
+  messageAr: string;
+  details: Record<string, unknown> | null;
+}
+
+/** `requested = optedOut + suppressed + invalidPhone + duplicate + allowlistBlocked + eligible`. */
+export interface SendPreviewRecipients {
+  requested: number;
+  optedOut: number;
+  suppressed: number;
+  invalidPhone: number;
+  duplicate: number;
+  /** Non-zero only in a test environment with a recipient allowlist. */
+  allowlistBlocked: number;
+  /** What would reach WhatsApp. */
+  eligible: number;
+}
+
+export interface SendPreviewCredits {
+  billingType: 'prepaid' | 'postpaid';
+  /** `marketing`, `utility`, `authentication` or `service` (a text reply). */
+  chargeCategory: string;
+  perMessage: number;
+  /** `perMessage × eligible`, or 0 under a covering subscription. An upper bound for a campaign. */
+  estimated: number;
+  fromFreeAllowance: number;
+  fromPaidBalance: number;
+  coveredBySubscription: boolean;
+}
+
+export interface SendPreviewBalance {
+  /** What `balance.get()` reports as available; `null` on postpaid billing. */
+  availableCredits: number | null;
+  /** `availableCredits − estimated`; negative means short. `null` on postpaid billing. */
+  afterSend: number | null;
+  unlimited: boolean;
+}
+
+/**
+ * What a send would do, from `messages.preview()` or `campaigns.preview()`.
+ * Nothing is sent, charged or written. The balance can change before the real call.
+ */
+export interface SendPreview {
+  kind: 'template' | 'text' | 'campaign';
+  /** `true` when the real call would be accepted (`refusal` is `null`). */
+  wouldSend: boolean;
+  refusal: SendPreviewRefusal | null;
+  /** `null` for a text reply. `category` is `null` when the template is not in the synced list (charged as marketing). */
+  template: { name: string; language: string | null; category: string | null } | null;
+  /** `null` when a refusal stopped the preview before the audience was resolved. */
+  recipients: SendPreviewRecipients | null;
+  credits: SendPreviewCredits | null;
+  balance: SendPreviewBalance | null;
+  /** When the balance was read (ISO 8601). */
+  asOf: string;
+}
+
+/** The body of `messages.send()` or `messages.sendText()`, without the idempotency key. */
+export type PreviewMessageInput =
+  | Omit<SendMessageOptions, 'idempotencyKey'>
+  | Omit<SendTextReplyOptions, 'idempotencyKey'>;
