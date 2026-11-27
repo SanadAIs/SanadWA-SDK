@@ -350,7 +350,12 @@ export interface SendPreviewCredits {
   /** `marketing`, `utility`, `authentication` or `service` (a text reply). */
   chargeCategory: string;
   perMessage: number;
-  /** `perMessage × eligible`, or 0 under a covering subscription. An upper bound for a campaign. */
+  /**
+   * `perMessage × eligible`, or 0 under a covering subscription. For a campaign
+   * that starts now it is an upper bound (failed messages are not charged). For a
+   * scheduled campaign it is computed now and is not a bound: the audience,
+   * coverage and credits are checked again when the campaign starts.
+   */
   estimated: number;
   fromFreeAllowance: number;
   fromPaidBalance: number;
@@ -384,7 +389,12 @@ export interface SendPreview {
   asOf: string;
 }
 
-/** The body of `messages.send()` or `messages.sendText()`, without the idempotency key. */
+/**
+ * The body of `messages.send()` (with `templateName`) or of `messages.sendText()`
+ * (with `text`), without the idempotency key. Exactly one of the two kinds.
+ */
 export type PreviewMessageInput =
-  | Omit<SendMessageOptions, 'idempotencyKey'>
-  | Omit<SendTextReplyOptions, 'idempotencyKey'>;
+  | (Omit<SendMessageOptions, 'idempotencyKey'> & { text?: never; previewUrl?: never })
+  | (Omit<SendTextReplyOptions, 'idempotencyKey'> & {
+    templateName?: never; templateLanguage?: never; templateParams?: never; templateComponents?: never;
+  });

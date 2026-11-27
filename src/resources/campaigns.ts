@@ -185,7 +185,10 @@ export class CampaignsResource {
    * `refusal`; it is not thrown. No `idempotencyKey` is needed (one passed is
    * ignored), and an API key with scope `read` is enough. The API allows 20
    * previews per minute per key on top of the general rate limit. The balance
-   * can change before the real create, which stays the authority.
+   * can change before the real create, which stays the authority. For a
+   * campaign that starts now `credits.estimated` is an upper bound; for a
+   * scheduled one (`sendAt`) it is computed now and is not a bound, because the
+   * audience, coverage and credits are checked again when it starts.
    */
   readonly preview = async (input: PreviewCampaignInput): Promise<SendPreview> => {
     const raw = await this.#req<unknown>({

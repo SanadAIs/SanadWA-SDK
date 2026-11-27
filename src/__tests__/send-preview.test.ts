@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { previewMessage } from '../resources/messages.js';
 import { toSendPreview } from '../resources/send-preview.js';
 import { SanadApiError, SanadWhatsApp } from '../index.js';
-import type { SendPreview } from '../index.js';
+import type { PreviewMessageInput, SendPreview } from '../index.js';
 import type { Requester, RequestOptions } from '../request.js';
 
 const fakeRequester = (response: unknown) => {
@@ -138,5 +138,35 @@ describe('messages.preview', () => {
     expect(String(url)).toMatch(/\/messages\/preview$/);
     expect(init.method).toBe('POST');
     expect(new Headers(init.headers).get('idempotency-key')).toBeNull();
+  });
+});
+
+describe('messages.preview input is a template or a text reply, never both', () => {
+  it('refuses both templateName and text, or neither, before any request', async () => {
+    const { req, fn } = fakeRequester({ success: true, data: previewWire });
+    const both = { ...input, text: 'Hello' } as unknown as PreviewMessageInput;
+    const neither = { phoneNumberId: '100000000000001', toPhone: '+12025550123' } as unknown as PreviewMessageInput;
+    const textUndefined = { ...input, templateName: undefined, text: undefined } as unknown as PreviewMessageInput;
+    for (const bad of [both, neither, textUndefined]) {
+      await expect(previewMessage(req, bad)).rejects.toMatchObject({ code: 'invalid_preview_input', status: 0 });
+    }
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('a template input with text: undefined is still a template preview', async () => {
+    const { req, calls } = fakeRequester({ success: true, data: previewWire });
+    await previewMessage(req, { ...input, text: undefined } as unknown as PreviewMessageInput);
+    expect(calls[0]!.body).toHaveProperty('template_name', 'order_update');
+    expect(calls[0]!.body).not.toHaveProperty('text');
+  });
+
+  it('the type refuses both kinds at compile time', () => {
+    // @ts-expect-error a template input cannot also carry text
+    const both: PreviewMessageInput = { ...input, text: 'Hello' };
+    // @ts-expect-error a text input cannot also carry templateName
+    const textWithTemplate: PreviewMessageInput = { phoneNumberId: '1', toPhone: '+12025550123', text: 'Hi', templateName: 'x' };
+    const template: PreviewMessageInput = input;
+    const text: PreviewMessageInput = { phoneNumberId: '1', toPhone: '+12025550123', text: 'Hi' };
+    expect([both, textWithTemplate, template, text]).toHaveLength(4);
   });
 });

@@ -1,4 +1,5 @@
 import type { Requester } from '../request.js';
+import { ValidationError } from '../errors.js';
 import type {
   Message,
   SendMessageOptions,
@@ -138,7 +139,18 @@ const textBody = (opts: Omit<SendTextReplyOptions, 'idempotencyKey'>): Record<st
  * before the real call, which stays the authority.
  */
 export const previewMessage = async (req: Requester, input: PreviewMessageInput): Promise<SendPreview> => {
-  const body = 'text' in input ? textBody(input) : templateBody(input);
+  const hasTemplate = (input as { templateName?: unknown }).templateName !== undefined;
+  const hasText = (input as { text?: unknown }).text !== undefined;
+  if (hasTemplate === hasText) {
+    throw new ValidationError({
+      message: 'Pass either `templateName` (a template message) or `text` (a text reply), not both.',
+      code: 'invalid_preview_input',
+      status: 0,
+    });
+  }
+  const body = hasText
+    ? textBody(input as Omit<SendTextReplyOptions, 'idempotencyKey'>)
+    : templateBody(input as Omit<SendMessageOptions, 'idempotencyKey'>);
   const raw = await req<unknown>({ method: 'POST', path: '/messages/preview', body, idempotent: false });
   return toSendPreview(raw);
 };

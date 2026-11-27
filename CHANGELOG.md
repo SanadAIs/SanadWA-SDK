@@ -9,6 +9,8 @@ Added:
   exclusions, template category, estimated credits, balance before and after, and the refusal the
   real call would answer) without sending, charging or writing. A refusal is returned in
   `SendPreview.refusal`, not thrown; no idempotency key is used; a `read` key is enough.
+  `messages.preview()` takes exactly one of `templateName` or `text` (typed as exclusive; both or
+  neither throws `ValidationError` `invalid_preview_input` before any request).
 
 ## 0.4.0 — 2026-11-21
 
