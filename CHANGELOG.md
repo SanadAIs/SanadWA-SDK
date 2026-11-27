@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- `sdk.messages.preview()` and `sdk.campaigns.preview()` (`POST /messages/preview`,
+  `POST /campaigns/preview`): what a send or a campaign create would do (recipients after
+  exclusions, template category, estimated credits, balance before and after, and the refusal the
+  real call would answer) without sending, charging or writing. A refusal is returned in
+  `SendPreview.refusal`, not thrown; no idempotency key is used; a `read` key is enough.
+
 ## 0.4.0 — 2026-11-21
 
 Added:

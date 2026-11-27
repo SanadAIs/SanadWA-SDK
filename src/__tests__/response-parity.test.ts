@@ -472,6 +472,15 @@ runTable(
   [{ path: ['data'], kind: 'object' }, ...previewFields],
 );
 
+runTable(
+  'campaigns.preview',
+  (req) => new CampaignsResource(req).preview({
+    name: 'November offer', phoneNumberId: '100000000000001', template: { name: 'november_offer', language: 'ar' }, audience: { tags: ['vip'] },
+  }),
+  { success: true, data: { ...previewWire, kind: 'campaign' } },
+  [{ path: ['data'], kind: 'object' }, ...previewFields],
+);
+
 // ── Not retried, through the client ─────────────────────────────────────────
 
 describe('a malformed field through the client', () => {

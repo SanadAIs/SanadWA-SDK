@@ -309,6 +309,9 @@ export interface CreateCampaignInput {
   idempotencyKey: string;
 }
 
+/** The input of `campaigns.preview()`: `create()`'s input without the key. */
+export type PreviewCampaignInput = Omit<CreateCampaignInput, 'idempotencyKey'>;
+
 export interface CreatedCampaign {
   campaign: Campaign;
   /** `true` when the API answered with an earlier result for the same key. */

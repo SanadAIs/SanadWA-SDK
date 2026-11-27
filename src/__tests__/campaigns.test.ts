@@ -428,3 +428,69 @@ describe('campaigns — answers the SDK cannot read', () => {
       .rejects.toMatchObject({ code: 'malformed_response', status: 0 });
   });
 });
+
+describe('campaigns.preview', () => {
+  const campaignPreviewWire = {
+    kind: 'campaign',
+    would_send: true,
+    refusal: null,
+    template: { name: 'november_offer', language: 'ar', category: 'MARKETING' },
+    recipients: { requested: 5, opted_out: 1, suppressed: 1, invalid_phone: 0, duplicate: 0, allowlist_blocked: 0, eligible: 3 },
+    credits: { billing_type: 'prepaid', charge_category: 'marketing', per_message: 1, estimated: 3, from_free_allowance: 3, from_paid_balance: 0, covered_by_subscription: false },
+    balance: { available_credits: 10, after_send: 7, unlimited: false },
+    as_of: '2026-11-27T10:00:00.000Z',
+  };
+  const { idempotencyKey: _key, ...minimalInputWithoutKey } = minimalInput;
+
+  it('preview posts the create body to /campaigns/preview with no key', async () => {
+    const { req, calls } = fakeRequester({ success: true, data: campaignPreviewWire });
+    const result = await new CampaignsResource(req).preview({ ...minimalInputWithoutKey, sendAt: new Date('2026-12-01T06:00:00.000Z') });
+    expect(sent(calls[0]!)).toEqual({ method: 'POST', path: '/campaigns/preview', body: { ...minimalBody, send_at: '2026-12-01T06:00:00.000Z' }, idempotent: false });
+    expect(result.kind).toBe('campaign');
+    expect(result.recipients?.optedOut).toBe(1);
+    expect(result.credits?.estimated).toBe(3);
+    expect(result.balance?.afterSend).toBe(7);
+    expect(result.template?.category).toBe('MARKETING');
+  });
+
+  it('preview does not require idempotencyKey and never sends one it is given', async () => {
+    const { req, calls } = fakeRequester({ success: true, data: campaignPreviewWire });
+    await expect(new CampaignsResource(req).preview(minimalInputWithoutKey)).resolves.toMatchObject({ wouldSend: true });
+    await new CampaignsResource(req).preview(minimalInput);
+    for (const call of calls) {
+      expect(call.idempotencyKey).toBeUndefined();
+      expect(call.idempotent).toBe(false);
+      expect(call.body).not.toHaveProperty('idempotency_key');
+    }
+  });
+
+  it('a refusal comes back as data', async () => {
+    const refused = {
+      ...campaignPreviewWire,
+      would_send: false,
+      refusal: {
+        status: 402, code: 'insufficient_credits',
+        message: 'Your account does not have enough credits for this audience, so the campaign was not created.',
+        message_ar: 'رصيد حسابك لا يكفي لهذا الجمهور، فلم تُنشأ الحملة.',
+        details: { needed: 3, remaining: 1, shortfall: 2 },
+      },
+      balance: { available_credits: 1, after_send: -2, unlimited: false },
+    };
+    const { req } = fakeRequester({ success: true, data: refused });
+    const result = await new CampaignsResource(req).preview(minimalInputWithoutKey);
+    expect(result.wouldSend).toBe(false);
+    expect(result.refusal).toEqual({
+      status: 402, code: 'insufficient_credits', message: refused.refusal.message,
+      messageAr: refused.refusal.message_ar, details: { needed: 3, remaining: 1, shortfall: 2 },
+    });
+    expect(result.balance?.afterSend).toBe(-2);
+  });
+
+  it('a stopped preview has null counts', async () => {
+    const stopped = { ...campaignPreviewWire, would_send: false, recipients: null, credits: null, balance: null,
+      refusal: { status: 403, code: 'kyc_required', message: 'Verify.', message_ar: 'وثّق حسابك.', details: null } };
+    const { req } = fakeRequester({ success: true, data: stopped });
+    const result = await new CampaignsResource(req).preview(minimalInputWithoutKey);
+    expect(result).toMatchObject({ recipients: null, credits: null, balance: null, refusal: { code: 'kyc_required' } });
+  });
+});
