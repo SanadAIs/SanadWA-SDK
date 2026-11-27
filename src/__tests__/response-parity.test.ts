@@ -12,6 +12,7 @@ import { BalanceResource } from '../resources/balance.js';
 import { TagsResource } from '../resources/tags.js';
 import { ContactsResource } from '../resources/contacts.js';
 import { CampaignsResource } from '../resources/campaigns.js';
+import { previewMessage } from '../resources/messages.js';
 import type { Requester } from '../request.js';
 
 type Kind =
@@ -435,6 +436,50 @@ describe.each(campaignMethods)('campaigns.%s reads the campaign like get()', (_n
       .rejects.toMatchObject({ code: 'malformed_response', status: 0, message: expect.stringContaining('`data.counts.sent`') });
   });
 });
+
+// ── Send previews ───────────────────────────────────────────────────────────
+
+const previewWire = {
+  kind: 'template',
+  would_send: false,
+  refusal: { status: 402, code: 'PREPAID_CREDIT_CAP_REACHED', message: 'Not enough credits.', message_ar: 'الرصيد غير كافٍ.', details: { needed: 1 } },
+  template: { name: 'order_update', language: 'ar', category: 'UTILITY' },
+  recipients: { requested: 1, opted_out: 0, suppressed: 0, invalid_phone: 0, duplicate: 0, allowlist_blocked: 0, eligible: 1 },
+  credits: { billing_type: 'prepaid', charge_category: 'utility', per_message: 1, estimated: 1, from_free_allowance: 0, from_paid_balance: 1, covered_by_subscription: false },
+  balance: { available_credits: 0, after_send: -1, unlimited: false },
+  as_of: '2026-11-27T10:00:00.000Z',
+};
+
+const previewFields = at(['data'], [
+  ['kind', 'string'], ['would_send', 'bool'], ['refusal', 'nullableObject'], ['recipients', 'nullableObject'],
+  ['credits', 'nullableObject'], ['balance', 'nullableObject'], ['template', 'nullableObject'], ['as_of', 'string'],
+  ['refusal.status', 'int'], ['refusal.code', 'string'], ['refusal.message', 'string'], ['refusal.message_ar', 'string'],
+  ['refusal.details', 'nullableObject'],
+  ['template.name', 'string'], ['template.language', 'nullableString'], ['template.category', 'nullableString'],
+  ['recipients.requested', 'int'], ['recipients.opted_out', 'int'], ['recipients.suppressed', 'int'],
+  ['recipients.invalid_phone', 'int'], ['recipients.duplicate', 'int'], ['recipients.allowlist_blocked', 'int'],
+  ['recipients.eligible', 'int'],
+  ['credits.billing_type', 'string'], ['credits.charge_category', 'string'], ['credits.per_message', 'int'],
+  ['credits.estimated', 'int'], ['credits.from_free_allowance', 'int'], ['credits.from_paid_balance', 'int'],
+  ['credits.covered_by_subscription', 'bool'],
+  ['balance.available_credits', 'nullableNumber'], ['balance.after_send', 'nullableNumber'], ['balance.unlimited', 'bool'],
+]);
+
+runTable(
+  'messages.preview',
+  (req) => previewMessage(req, { phoneNumberId: '100000000000001', toPhone: '+12025550123', templateName: 'order_update' }),
+  { success: true, data: previewWire },
+  [{ path: ['data'], kind: 'object' }, ...previewFields],
+);
+
+runTable(
+  'campaigns.preview',
+  (req) => new CampaignsResource(req).preview({
+    name: 'November offer', phoneNumberId: '100000000000001', template: { name: 'november_offer', language: 'ar' }, audience: { tags: ['vip'] },
+  }),
+  { success: true, data: { ...previewWire, kind: 'campaign' } },
+  [{ path: ['data'], kind: 'object' }, ...previewFields],
+);
 
 // ── Not retried, through the client ─────────────────────────────────────────
 

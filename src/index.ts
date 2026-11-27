@@ -12,13 +12,14 @@
 import { createRequester, DEFAULT_TIMEOUT_MS, type Requester } from './request.js';
 import { health } from './resources/health.js';
 import { listTemplates } from './resources/templates.js';
-import { sendMessage, sendTextReply, getMessage } from './resources/messages.js';
+import { sendMessage, sendTextReply, getMessage, previewMessage } from './resources/messages.js';
 import { verifyWebhook } from './resources/webhooks.js';
 import { PhoneNumbersResource } from './resources/phone-numbers.js';
 import { BalanceResource } from './resources/balance.js';
 import { TagsResource } from './resources/tags.js';
 import { ContactsResource } from './resources/contacts.js';
 import { CampaignsResource } from './resources/campaigns.js';
+import type { PreviewMessageInput, SendPreview } from './resource-types.js';
 import type {
   ClientOptions,
   HealthResponse,
@@ -49,6 +50,7 @@ export class SanadWhatsApp {
     sendText: (opts: SendTextReplyOptions) => Promise<SendTextReplyResponse>;
     reply: (opts: SendTextReplyOptions) => Promise<SendTextReplyResponse>;
     get: (id: string) => Promise<Message>;
+    preview: (input: PreviewMessageInput) => Promise<SendPreview>;
   };
 
   readonly webhooks: {
@@ -99,6 +101,7 @@ export class SanadWhatsApp {
       sendText,
       reply: sendText,
       get: (id) => getMessage(this.#req, id),
+      preview: (input) => previewMessage(this.#req, input),
     };
   }
 

@@ -10,8 +10,11 @@ import type {
   CreatedCampaign,
   ListOptions,
   Page,
+  PreviewCampaignInput,
+  SendPreview,
   WriteOptions,
 } from '../resource-types.js';
+import { toSendPreview } from './send-preview.js';
 import {
   assertIdempotencyKey,
   idSegment,
@@ -105,7 +108,7 @@ const toVariableWire = (variable: CampaignTemplateVariable): Record<string, unkn
 };
 
 /** The API rejects a body with any other key, so every key is named here. */
-const toCreateBody = (input: CreateCampaignInput): Record<string, unknown> => {
+const toCreateBody = (input: PreviewCampaignInput): Record<string, unknown> => {
   const body: Record<string, unknown> = {
     name: input.name,
     phone_number_id: input.phoneNumberId,
@@ -171,6 +174,30 @@ export class CampaignsResource {
       },
     });
     return { campaign: toCampaignFromEnvelope(raw), replayed };
+  };
+
+  /**
+   * POST /campaigns/preview — what `create()` would do with this input, without
+   * creating anything.
+   *
+   * It never sends a message, never creates or queues a campaign and never
+   * charges credits. A refusal `create()` would throw comes back in
+   * `refusal`; it is not thrown. No `idempotencyKey` is needed (one passed is
+   * ignored), and an API key with scope `read` is enough. The API allows 20
+   * previews per minute per key on top of the general rate limit. The balance
+   * can change before the real create, which stays the authority. For a
+   * campaign that starts now `credits.estimated` is an upper bound; for a
+   * scheduled one (`sendAt`) it is computed now and is not a bound, because the
+   * audience, coverage and credits are checked again when it starts.
+   */
+  readonly preview = async (input: PreviewCampaignInput): Promise<SendPreview> => {
+    const raw = await this.#req<unknown>({
+      method: 'POST',
+      path: '/campaigns/preview',
+      body: toCreateBody(input),
+      idempotent: false,
+    });
+    return toSendPreview(raw);
   };
 
   /**

@@ -1,4 +1,5 @@
 import type { Requester } from '../request.js';
+import { ValidationError } from '../errors.js';
 import type {
   Message,
   SendMessageOptions,
@@ -6,7 +7,9 @@ import type {
   SendTextReplyOptions,
   SendTextReplyResponse,
 } from '../types.js';
+import type { PreviewMessageInput, SendPreview } from '../resource-types.js';
 import { assertIdempotencyKey, isIdempotentReplay } from './resource-helpers.js';
+import { toSendPreview } from './send-preview.js';
 
 interface SendWire {
   success: true;
@@ -86,15 +89,7 @@ export const sendMessage = async (
   req: Requester,
   opts: SendMessageOptions,
 ): Promise<SendMessageResponse> => {
-  const body: Record<string, unknown> = {
-    phone_number_id: opts.phoneNumberId,
-    to_phone: opts.toPhone,
-    template_name: opts.templateName,
-  };
-  if (opts.templateLanguage !== undefined) body.template_language = opts.templateLanguage;
-  if (opts.templateParams !== undefined) body.template_params = opts.templateParams;
-  if (opts.templateComponents !== undefined) body.template_components = opts.templateComponents;
-  return postMessage(req, '/messages/template', body, opts.idempotencyKey);
+  return postMessage(req, '/messages/template', templateBody(opts), opts.idempotencyKey);
 };
 
 /**
@@ -108,15 +103,56 @@ export const sendTextReply = async (
   req: Requester,
   opts: SendTextReplyOptions,
 ): Promise<SendTextReplyResponse> => {
+  const result = await postMessage(req, '/messages/text', textBody(opts), opts.idempotencyKey);
+  return { ...result, messageType: 'text' };
+};
+
+const templateBody = (opts: Omit<SendMessageOptions, 'idempotencyKey'>): Record<string, unknown> => {
+  const body: Record<string, unknown> = {
+    phone_number_id: opts.phoneNumberId,
+    to_phone: opts.toPhone,
+    template_name: opts.templateName,
+  };
+  if (opts.templateLanguage !== undefined) body.template_language = opts.templateLanguage;
+  if (opts.templateParams !== undefined) body.template_params = opts.templateParams;
+  if (opts.templateComponents !== undefined) body.template_components = opts.templateComponents;
+  return body;
+};
+
+const textBody = (opts: Omit<SendTextReplyOptions, 'idempotencyKey'>): Record<string, unknown> => {
   const body: Record<string, unknown> = {
     phone_number_id: opts.phoneNumberId,
     to_phone: opts.toPhone,
     text: opts.text,
   };
   if (opts.previewUrl !== undefined) body.preview_url = opts.previewUrl;
+  return body;
+};
 
-  const result = await postMessage(req, '/messages/text', body, opts.idempotencyKey);
-  return { ...result, messageType: 'text' };
+/**
+ * POST /messages/preview — what `send()` (an input with `templateName`) or
+ * `sendText()` (an input with `text`) would do, without sending.
+ *
+ * Nothing is sent, charged or stored, and no `Idempotency-Key` is used. A
+ * refusal the real call would answer comes back in `refusal`; it is not
+ * thrown. An API key with scope `read` is enough. The balance can change
+ * before the real call, which stays the authority.
+ */
+export const previewMessage = async (req: Requester, input: PreviewMessageInput): Promise<SendPreview> => {
+  const hasTemplate = (input as { templateName?: unknown }).templateName !== undefined;
+  const hasText = (input as { text?: unknown }).text !== undefined;
+  if (hasTemplate === hasText) {
+    throw new ValidationError({
+      message: 'Pass either `templateName` (a template message) or `text` (a text reply), not both.',
+      code: 'invalid_preview_input',
+      status: 0,
+    });
+  }
+  const body = hasText
+    ? textBody(input as Omit<SendTextReplyOptions, 'idempotencyKey'>)
+    : templateBody(input as Omit<SendMessageOptions, 'idempotencyKey'>);
+  const raw = await req<unknown>({ method: 'POST', path: '/messages/preview', body, idempotent: false });
+  return toSendPreview(raw);
 };
 
 /**
