@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+Added:
+
+- `messages()->preview(SendMessageOptions|SendTextOptions)` and
+  `campaigns()->preview(PreviewCampaignOptions|CreateCampaignOptions)` (`POST /messages/preview`,
+  `POST /campaigns/preview`): what a send or a campaign create would do (recipients after
+  exclusions, template category, estimated credits, balance before and after, and the refusal the
+  real call would answer) without sending, charging or writing. Both return `SendPreview`. A
+  refusal is returned in `SendPreview::$refusal` (with `messageAr`), not thrown; 4xx/5xx answers
+  throw the usual exceptions. No `Idempotency-Key` is sent (a key set on the options is ignored);
+  a `read` key is enough.
+- DTOs `SendPreview`, `SendPreviewRefusal`, `SendPreviewTemplate`, `SendPreviewRecipients`,
+  `SendPreviewCredits`, `SendPreviewBalance` and `PreviewCampaignOptions`.
+
 ## 0.4.0 — 2026-11-21
 
 Added:

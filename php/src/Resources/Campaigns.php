@@ -14,10 +14,13 @@ use Sanadwa\WhatsApp\Dto\CampaignTemplateVariable;
 use Sanadwa\WhatsApp\Dto\CreateCampaignOptions;
 use Sanadwa\WhatsApp\Dto\CreatedCampaign;
 use Sanadwa\WhatsApp\Dto\Page;
+use Sanadwa\WhatsApp\Dto\PreviewCampaignOptions;
+use Sanadwa\WhatsApp\Dto\SendPreview;
 use Sanadwa\WhatsApp\Exceptions\ValidationError;
 use Sanadwa\WhatsApp\Http\Requester;
 use Sanadwa\WhatsApp\Http\ResponseValidator;
 use Sanadwa\WhatsApp\Resources\Support\ResourceSupport;
+use Sanadwa\WhatsApp\Resources\Support\SendPreviewMapper;
 
 final class Campaigns
 {
@@ -49,34 +52,7 @@ final class Campaigns
         }
         ResourceSupport::validateIdempotencyKey($options->idempotencyKey);
 
-        // The API refuses any key it does not know, so the idempotency key
-        // travels in the header only and unset options are left out.
-        $body = [
-            'name' => $options->name,
-            'phone_number_id' => $options->phoneNumberId,
-            'template' => [
-                'name' => $options->templateName,
-                'language' => $options->templateLanguage,
-            ],
-            'audience' => ['tags' => array_values($options->audienceTags)],
-        ];
-        if ($options->templateVariables !== null) {
-            $body['template_variables'] = array_map(
-                self::variableItem(...),
-                array_values($options->templateVariables),
-            );
-        }
-        if ($options->headerMediaUrl !== null) {
-            $body['header_media_url'] = $options->headerMediaUrl;
-        }
-        if ($options->trackedDestinationUrl !== null) {
-            $body['tracked_destination_url'] = $options->trackedDestinationUrl;
-        }
-        if ($options->sendAt !== null) {
-            $body['send_at'] = $options->sendAt instanceof \DateTimeInterface
-                ? $options->sendAt->format(DATE_ATOM)
-                : $options->sendAt;
-        }
+        $body = self::createBody($options);
 
         $replayed = false;
         $raw = $this->requester->request(
@@ -94,6 +70,29 @@ final class Campaigns
             campaign: self::mapCampaign(ResourceSupport::dataObject($raw), 'data'),
             replayed: $replayed,
         );
+    }
+
+    /**
+     * Reports what `create()` would do with this input, without creating anything.
+     *
+     * It never sends a message, never creates or queues a campaign and never
+     * charges credits. A refusal `create()` would throw comes back in
+     * `SendPreview::$refusal`; it is not thrown. No idempotency key is used: a
+     * `CreateCampaignOptions` may be passed and its key is ignored. An API key
+     * with scope `read` is enough. The API allows 20 previews per minute per
+     * key on top of the general rate limit. The balance can change before the
+     * real create, which stays the authority. For a campaign that starts now
+     * `credits->estimated` is an upper bound; for a scheduled one (`sendAt`) it
+     * is computed now and is not a bound, because the audience, coverage and
+     * credits are checked again when it starts.
+     */
+    public function preview(PreviewCampaignOptions|CreateCampaignOptions $options): SendPreview
+    {
+        return SendPreviewMapper::map($this->requester->request(
+            method: 'POST',
+            path: '/campaigns/preview',
+            body: self::createBody($options),
+        ));
     }
 
     /**
@@ -156,6 +155,43 @@ final class Campaigns
         );
 
         return self::mapCampaign(ResourceSupport::dataObject($raw), 'data');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function createBody(PreviewCampaignOptions|CreateCampaignOptions $options): array
+    {
+        // The API refuses any key it does not know, so the idempotency key
+        // travels in the header only and unset options are left out.
+        $body = [
+            'name' => $options->name,
+            'phone_number_id' => $options->phoneNumberId,
+            'template' => [
+                'name' => $options->templateName,
+                'language' => $options->templateLanguage,
+            ],
+            'audience' => ['tags' => array_values($options->audienceTags)],
+        ];
+        if ($options->templateVariables !== null) {
+            $body['template_variables'] = array_map(
+                self::variableItem(...),
+                array_values($options->templateVariables),
+            );
+        }
+        if ($options->headerMediaUrl !== null) {
+            $body['header_media_url'] = $options->headerMediaUrl;
+        }
+        if ($options->trackedDestinationUrl !== null) {
+            $body['tracked_destination_url'] = $options->trackedDestinationUrl;
+        }
+        if ($options->sendAt !== null) {
+            $body['send_at'] = $options->sendAt instanceof \DateTimeInterface
+                ? $options->sendAt->format(DATE_ATOM)
+                : $options->sendAt;
+        }
+
+        return $body;
     }
 
     /**
