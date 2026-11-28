@@ -238,6 +238,7 @@ foreach ($page->data as $template) {
 | `$sdk->messages()->send(SendMessageOptions)`       | Sends an approved template message.                  |
 | `$sdk->messages()->sendText(SendTextOptions)`      | Sends a free-form text reply. `reply()` is an alias. |
 | `$sdk->messages()->get(string $id)`                | Looks up one message by its WhatsApp message id.     |
+| `$sdk->messages()->preview(SendMessageOptions\|SendTextOptions)` | What `send()` or `sendText()` would do, without sending. |
 
 **Send a template**
 
@@ -302,6 +303,52 @@ echo $message->status ?? 'unknown', ' ', $message->deliveredAt ?? '-', "\n";
 
 `status`, `sentAt`, `toPhone`, `channel` and `provider` can be `null`. The known `status` values
 are `sent`, `delivered`, `read` and `failed`. Treat any other value as not final.
+
+**Preview a send**
+
+```php
+<?php
+
+use Sanadwa\WhatsApp\Dto\SendMessageOptions;
+
+$preview = $sdk->messages()->preview(new SendMessageOptions(
+    phoneNumberId: 'YOUR_PHONE_NUMBER_ID',
+    toPhone: '+966500000000',
+    templateName: 'order_update',
+    templateLanguage: 'en',
+    templateParams: ['Alice', '#1042'],
+));
+
+if ($preview->wouldSend) {
+    echo $preview->credits?->estimated, ' credits, ', $preview->balance?->afterSend ?? '-', " left\n";
+} else {
+    echo $preview->refusal?->code, ': ', $preview->refusal?->message, "\n";
+    echo $preview->refusal?->messageAr, "\n";
+}
+```
+
+`preview()` takes the same options as `send()` (a `SendMessageOptions`) or `sendText()` (a
+`SendTextOptions`) and reports what that call would do: the recipient count after opt-out,
+suppression and allowlist exclusions, the template category, the estimated credits, the balance
+now and after the send, and the refusal the real call would answer.
+
+- **Nothing is sent, charged or stored.** An API key with scope `read` is enough.
+- **No `Idempotency-Key` is sent.** An `idempotencyKey` set on the options is ignored.
+- **A refusal is data, not an exception.** When the real call would be refused, the API answers
+  `200`, `wouldSend` is `false` and `refusal` holds the real call's `status`, `code`, `message`,
+  `messageAr` and `details` (an array or `null`). The code is spelled as the real call answers it,
+  for example `PREPAID_CREDIT_CAP_REACHED` or `MARKETING_SUPPRESSED`.
+- `kind` is `template` or `text`. `template` (`name`, `language`, `category`) is `null` for a text
+  reply; `category` is `null` when the template is not in your synced list, and the send is then
+  charged and consent-checked as marketing.
+- `recipients`, `credits` and `balance` are `null` when a refusal stopped the preview before the
+  recipient was resolved. `balance->availableCredits` and `->afterSend` are `null` on postpaid
+  billing; a negative `afterSend` means the send is short by that much.
+- The preview is a snapshot taken at `asOf`. The balance can change before the real call, which
+  decides.
+- Errors are thrown as for any other call (see [Errors](#errors)): `400 validation_error`
+  (`ValidationError`), `401`/`403` (`AuthError`), `429` (`RateLimitedError`), `500
+  message_preview_failed` (`ServerError`).
 
 ### Balance
 
@@ -465,6 +512,7 @@ A contact that opted out cannot be deleted: the API answers `409 contact_opted_o
 | `$sdk->campaigns()->get(string\|int $id)`                            | One campaign with message and click counts.          |
 | `$sdk->campaigns()->pause(string\|int $id, ?string $idempotencyKey)` | Pauses an active campaign.                           |
 | `$sdk->campaigns()->resume(string\|int $id, ?string $idempotencyKey)` | Resumes a paused campaign.                           |
+| `$sdk->campaigns()->preview(PreviewCampaignOptions\|CreateCampaignOptions)` | What `create()` would do, without creating anything. |
 
 **Create**
 
@@ -552,9 +600,47 @@ if ($campaigns !== []) {
 - `resume()` can answer `402 insufficient_credits` or `402 subscription_lapsed`
   (base `SanadApiError`).
 
+**Preview**
+
+```php
+<?php
+
+use Sanadwa\WhatsApp\Dto\PreviewCampaignOptions;
+
+$preview = $sdk->campaigns()->preview(new PreviewCampaignOptions(
+    name: 'November offer',
+    phoneNumberId: 'YOUR_PHONE_NUMBER_ID',
+    templateName: 'november_offer',
+    templateLanguage: 'ar',
+    audienceTags: ['vip'],
+));
+
+if ($preview->recipients !== null) {
+    echo $preview->recipients->eligible, ' of ', $preview->recipients->requested, " contacts\n";
+}
+if (!$preview->wouldSend) {
+    echo $preview->refusal?->code, ': ', $preview->refusal?->messageAr, "\n";
+}
+```
+
+- `preview()` takes the fields of `CreateCampaignOptions` without the idempotency key
+  (`PreviewCampaignOptions`). It also accepts the `CreateCampaignOptions` you are about to pass to
+  `create()`; its key is ignored and no `Idempotency-Key` is sent.
+- It never creates or queues a campaign, never sends a message and never charges credits. An API
+  key with scope `read` is enough.
+- **A refusal is data, not an exception.** The refusal `create()` would answer (for example
+  `insufficient_credits` or `audience_empty`) comes back in `refusal` with `wouldSend` `false`.
+- `recipients` breaks the audience down: `requested` = `optedOut` + `suppressed` + `invalidPhone`
+  + `duplicate` + `allowlistBlocked` + `eligible`.
+- For a campaign that starts now, `credits->estimated` is an upper bound (failed messages are not
+  charged). For a scheduled campaign (`sendAt`) it is computed now and is not a bound: the
+  audience, coverage and credits are checked again when the campaign starts.
+- The API allows 20 previews per minute per key, on top of the general rate limit. The 21st
+  throws `RateLimitedError` (`rate_limited`).
+
 ## Covered endpoints
 
-The public API has 20 operations. The SDK wraps 19 of them.
+The public API has 22 operations. The SDK wraps 21 of them.
 
 | #  | Operation                      | SDK method                                      |
 | -- | ------------------------------ | ----------------------------------------------- |
@@ -564,20 +650,22 @@ The public API has 20 operations. The SDK wraps 19 of them.
 | 4  | `POST /messages/template`      | `$sdk->messages()->send()`                      |
 | 5  | `POST /messages/text`          | `$sdk->messages()->sendText()` (alias `reply()`) |
 | 6  | `GET /messages/{id}`           | `$sdk->messages()->get()`                       |
-| 7  | `GET /balance`                 | `$sdk->balance()->get()`                        |
-| 8  | `GET /tags`                    | `$sdk->tags()->list()`                          |
-| 9  | `POST /tags`                   | `$sdk->tags()->create()`                        |
-| 10 | `DELETE /tags/{id}`            | `$sdk->tags()->delete()`                        |
-| 11 | `GET /contacts`                | `$sdk->contacts()->list()`                      |
-| 12 | `POST /contacts`               | `$sdk->contacts()->upsert()`                    |
-| 13 | `POST /contacts/import`        | `$sdk->contacts()->import()`                    |
-| 14 | `DELETE /contacts/{id}`        | `$sdk->contacts()->delete()`                    |
-| 15 | `POST /campaigns`              | `$sdk->campaigns()->create()`                   |
-| 16 | `GET /campaigns`               | `$sdk->campaigns()->list()`                     |
-| 17 | `GET /campaigns/{id}`          | `$sdk->campaigns()->get()`                      |
-| 18 | `POST /campaigns/{id}/pause`   | `$sdk->campaigns()->pause()`                    |
-| 19 | `POST /campaigns/{id}/resume`  | `$sdk->campaigns()->resume()`                   |
-| 20 | `GET /openapi.json`            | Not wrapped. It is a public document and needs no key. Fetch `https://api.sanadwa.com/v1/openapi.json` directly. |
+| 7  | `POST /messages/preview`       | `$sdk->messages()->preview()`                   |
+| 8  | `GET /balance`                 | `$sdk->balance()->get()`                        |
+| 9  | `GET /tags`                    | `$sdk->tags()->list()`                          |
+| 10 | `POST /tags`                   | `$sdk->tags()->create()`                        |
+| 11 | `DELETE /tags/{id}`            | `$sdk->tags()->delete()`                        |
+| 12 | `GET /contacts`                | `$sdk->contacts()->list()`                      |
+| 13 | `POST /contacts`               | `$sdk->contacts()->upsert()`                    |
+| 14 | `POST /contacts/import`        | `$sdk->contacts()->import()`                    |
+| 15 | `DELETE /contacts/{id}`        | `$sdk->contacts()->delete()`                    |
+| 16 | `POST /campaigns`              | `$sdk->campaigns()->create()`                   |
+| 17 | `POST /campaigns/preview`      | `$sdk->campaigns()->preview()`                  |
+| 18 | `GET /campaigns`               | `$sdk->campaigns()->list()`                     |
+| 19 | `GET /campaigns/{id}`          | `$sdk->campaigns()->get()`                      |
+| 20 | `POST /campaigns/{id}/pause`   | `$sdk->campaigns()->pause()`                    |
+| 21 | `POST /campaigns/{id}/resume`  | `$sdk->campaigns()->resume()`                   |
+| 22 | `GET /openapi.json`            | Not wrapped. It is a public document and needs no key. Fetch `https://api.sanadwa.com/v1/openapi.json` directly. |
 
 `Webhooks::verify()` makes no HTTP call.
 
@@ -608,6 +696,8 @@ for ($page = 1; ; $page++) {
 - Every write sends an `Idempotency-Key` header: `messages()->send()`, `messages()->sendText()`,
   `tags()->create()`, `tags()->delete()`, `contacts()->upsert()`, `contacts()->import()`,
   `contacts()->delete()`, `campaigns()->pause()` and `campaigns()->resume()`.
+- `messages()->preview()` and `campaigns()->preview()` write nothing and send no
+  `Idempotency-Key`; a key set on their options is ignored.
 - When you pass no `idempotencyKey`, the SDK generates a UUID. It reuses the same key on every
   automatic retry of that call, so a retry after a lost response does not repeat the action.
 - `campaigns()->create()` is the exception: you must pass the key yourself. See

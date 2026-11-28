@@ -8,12 +8,14 @@ use Psr\Http\Message\ResponseInterface;
 use Sanadwa\WhatsApp\Dto\Message;
 use Sanadwa\WhatsApp\Dto\SendMessageOptions;
 use Sanadwa\WhatsApp\Dto\SendMessageResponse;
+use Sanadwa\WhatsApp\Dto\SendPreview;
 use Sanadwa\WhatsApp\Dto\SendTextOptions;
 use Sanadwa\WhatsApp\Dto\SendTextReplyResponse;
 use Sanadwa\WhatsApp\Dto\Upstream;
 use Sanadwa\WhatsApp\Http\Requester;
 use Sanadwa\WhatsApp\Http\ResponseValidator;
 use Sanadwa\WhatsApp\Resources\Support\ResourceSupport;
+use Sanadwa\WhatsApp\Resources\Support\SendPreviewMapper;
 
 final class Messages
 {
@@ -22,6 +24,54 @@ final class Messages
     }
 
     public function send(SendMessageOptions $options): SendMessageResponse
+    {
+        return $this->postMessage('/messages/template', self::templateBody($options), $options->idempotencyKey);
+    }
+
+    public function sendText(SendTextOptions $options): SendTextReplyResponse
+    {
+        $response = $this->postMessage('/messages/text', self::textBody($options), $options->idempotencyKey);
+
+        return new SendTextReplyResponse(
+            messageId: $response->messageId,
+            acceptedAt: $response->acceptedAt,
+            replayed: $response->replayed,
+            upstream: $response->upstream,
+        );
+    }
+
+    /**
+     * Reports what `send()` (a `SendMessageOptions`) or `sendText()` (a
+     * `SendTextOptions`) would do with this input, without sending.
+     *
+     * Nothing is sent, charged or stored, and no `Idempotency-Key` is sent: an
+     * `idempotencyKey` set on the options is ignored. A refusal the real call
+     * would answer comes back in `SendPreview::$refusal`; it is not thrown. An
+     * API key with scope `read` is enough. The balance can change before the
+     * real call, which stays the authority.
+     */
+    public function preview(SendMessageOptions|SendTextOptions $options): SendPreview
+    {
+        $body = $options instanceof SendMessageOptions
+            ? self::templateBody($options)
+            : self::textBody($options);
+
+        return SendPreviewMapper::map($this->requester->request(
+            method: 'POST',
+            path: '/messages/preview',
+            body: $body,
+        ));
+    }
+
+    public function reply(SendTextOptions $options): SendTextReplyResponse
+    {
+        return $this->sendText($options);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function templateBody(SendMessageOptions $options): array
     {
         $body = [
             'phone_number_id' => $options->phoneNumberId,
@@ -38,10 +88,13 @@ final class Messages
             $body['template_components'] = $options->templateComponents;
         }
 
-        return $this->postMessage('/messages/template', $body, $options->idempotencyKey);
+        return $body;
     }
 
-    public function sendText(SendTextOptions $options): SendTextReplyResponse
+    /**
+     * @return array<string, mixed>
+     */
+    private static function textBody(SendTextOptions $options): array
     {
         $body = [
             'phone_number_id' => $options->phoneNumberId,
@@ -52,19 +105,7 @@ final class Messages
             $body['preview_url'] = $options->previewUrl;
         }
 
-        $response = $this->postMessage('/messages/text', $body, $options->idempotencyKey);
-
-        return new SendTextReplyResponse(
-            messageId: $response->messageId,
-            acceptedAt: $response->acceptedAt,
-            replayed: $response->replayed,
-            upstream: $response->upstream,
-        );
-    }
-
-    public function reply(SendTextOptions $options): SendTextReplyResponse
-    {
-        return $this->sendText($options);
+        return $body;
     }
 
     private function postMessage(
